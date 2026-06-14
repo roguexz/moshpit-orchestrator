@@ -10,6 +10,62 @@ from moshpit.exceptions import PlatformNotSupportedError, MusicAppException
 runner = CliRunner()
 
 
+def get_cli_default_tracks():
+    import typer.main
+
+    click_obj = typer.main.get_command(app)
+    run_cmd = click_obj.get_command(None, "run")
+    if run_cmd:
+        for p in run_cmd.params:
+            if p.name == "tracks_per_artist":
+                return p.default
+    return 3
+
+
+@pytest.fixture(autouse=True)
+def clean_env(tmp_path):
+    # Force defaults to prevent host environment pollution
+    db_file = tmp_path / "test_moshpit_cache.db"
+    with mock.patch.dict(
+        os.environ,
+        {
+            "MOSHPIT_LLM_BASE_URL": "http://localhost:11434",
+            "MOSHPIT_LLM_MODEL": "llava",
+            "MOSHPIT_LLM_TIMEOUT": "120.0",
+            "MOSHPIT_OLLAMA_BASE_URL": "http://localhost:11434",
+            "MOSHPIT_OLLAMA_MODEL": "llava",
+            "MOSHPIT_OLLAMA_TIMEOUT": "120.0",
+            "MOSHPIT_DEFAULT_TRACKS_PER_ARTIST": "3",
+            "MOSHPIT_JXA_TIMEOUT": "30.0",
+            "MOSHPIT_CACHE_DB_PATH": str(db_file),
+        },
+    ):
+        yield
+
+
+def test_settings_default():
+    settings = Settings()
+    assert settings.llm_base_url == "http://localhost:11434"
+    assert settings.default_tracks_per_artist == 3
+
+
+def test_settings_env_override():
+    with mock.patch.dict(os.environ, {"MOSHPIT_LLM_BASE_URL": "http://ollama:11434"}):
+        settings = Settings()
+        assert settings.llm_base_url == "http://ollama:11434"
+
+
+def test_settings_fallback_env_override():
+    # Test that legacy OLLAMA env var overrides llm_base_url when llm env var is absent
+    with mock.patch.dict(
+        os.environ,
+        {"MOSHPIT_OLLAMA_BASE_URL": "http://legacy-ollama:11434"},
+        clear=True,
+    ):
+        settings = Settings()
+        assert settings.llm_base_url == "http://legacy-ollama:11434"
+
+
 @pytest.fixture
 def mock_ipc_engine():
     # Mock AppleMusicIPCEngine instantiation and methods
@@ -20,20 +76,6 @@ def mock_ipc_engine():
         mock_instance.append_top_tracks.return_value = {"status": "success", "count": 3}
         mock_instance.write_failure_manifest.return_value = "failure_manifest.json"
         yield mock_instance
-
-
-def test_settings_default():
-    settings = Settings()
-    assert settings.ollama_base_url == "http://localhost:11434"
-    assert settings.default_tracks_per_artist == 3
-
-
-def test_settings_env_override():
-    with mock.patch.dict(
-        os.environ, {"MOSHPIT_OLLAMA_BASE_URL": "http://ollama:11434"}
-    ):
-        settings = Settings()
-        assert settings.ollama_base_url == "http://ollama:11434"
 
 
 def test_validate_platform_darwin():
@@ -77,8 +119,11 @@ def test_cli_run_url_scraper(mock_ipc_engine):
             )
             assert result.exit_code == 0
             # Check generated playlist name: Domain capitalized
-            mock_ipc_engine.append_top_tracks.assert_any_call("Tool", 3)
-            mock_ipc_engine.append_top_tracks.assert_any_call("Deftones", 3)
+            default_tracks = get_cli_default_tracks()
+            mock_ipc_engine.append_top_tracks.assert_any_call("Tool", default_tracks)
+            mock_ipc_engine.append_top_tracks.assert_any_call(
+                "Deftones", default_tracks
+            )
 
 
 def test_cli_run_visual_ingester(mock_ipc_engine, tmp_path):
@@ -93,7 +138,8 @@ def test_cli_run_visual_ingester(mock_ipc_engine, tmp_path):
 
             result = runner.invoke(app, ["run", str(image_file)])
             assert result.exit_code == 0
-            mock_ipc_engine.append_top_tracks.assert_called_with("Tool", 3)
+            default_tracks = get_cli_default_tracks()
+            mock_ipc_engine.append_top_tracks.assert_called_with("Tool", default_tracks)
 
 
 def test_cli_run_text_file(mock_ipc_engine, tmp_path):
@@ -105,8 +151,9 @@ def test_cli_run_text_file(mock_ipc_engine, tmp_path):
     with mock.patch("sys.platform", "darwin"):
         result = runner.invoke(app, ["run", str(text_file)])
         assert result.exit_code == 0
-        mock_ipc_engine.append_top_tracks.assert_any_call("Tool", 3)
-        mock_ipc_engine.append_top_tracks.assert_any_call("Suicideboys", 3)
+        default_tracks = get_cli_default_tracks()
+        mock_ipc_engine.append_top_tracks.assert_any_call("Tool", default_tracks)
+        mock_ipc_engine.append_top_tracks.assert_any_call("Suicideboys", default_tracks)
 
 
 def test_cli_run_dry_run(mock_ipc_engine):
@@ -258,3 +305,14 @@ def test_cli_run_sync_remove_previous_manifest(mock_ipc_engine, tmp_path):
         # Cleanup in case test fails
         if os.path.exists("failure_manifest.json"):
             os.remove("failure_manifest.json")
+
+
+def test_cli_run_print_artists(tmp_path):
+    text_file = tmp_path / "list.txt"
+    text_file.write_text("Tool\nDeftones\n")
+
+    # Bypasses validate_platform so we can mock a non-darwin platform (e.g. linux)
+    with mock.patch("sys.platform", "linux"):
+        result = runner.invoke(app, ["run", str(text_file), "--print-artists"])
+        assert result.exit_code == 0
+        assert "Tool\nDeftones\n" in result.output

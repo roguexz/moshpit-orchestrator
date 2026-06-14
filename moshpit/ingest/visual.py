@@ -7,12 +7,12 @@ from moshpit.ingest.base import BaseIngester
 class VisualIngester(BaseIngester):
     """
     Ingester that reads local images (e.g. concert poster lineups)
-    and uses a local Vision-LLM via Ollama to extract artist names.
+    and uses a local Vision-LLM to extract artist names.
     """
 
     def extract_artists(self, image_path: str) -> list[str]:
         """
-        Loads the image, base64 encodes it, and queries Ollama to extract artists.
+        Loads the image, base64 encodes it, and queries the local LLM to extract artists.
         """
         if not os.path.exists(image_path):
             raise MoshpitException(
@@ -33,5 +33,5 @@ class VisualIngester(BaseIngester):
             'in JSON matching: {"artists": ["Artist Name 1", "Artist Name 2"]}.'
         )
 
-        raw_llm_output = self.query_ollama(prompt, image_b64=image_b64)
+        raw_llm_output = self.query_llm(prompt, image_b64=image_b64)
         return self.parse_and_validate_artists(raw_llm_output)

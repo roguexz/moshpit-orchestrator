@@ -86,11 +86,12 @@ class AppleMusicIPCEngine:
 
         # 3. Catalog Access Verification
         jxa_check = """
-        var searchResults = Music.search("Tool", {for: "shared"});
-        if (searchResults && searchResults.songs.length > 0) {
+        var playlist = Music.playlists()[0];
+        try {
+            var searchResults = Music.search(playlist, {for: "Tool"});
             return JSON.stringify({status: "success"});
-        } else {
-            return JSON.stringify({status: "failed"});
+        } catch (err) {
+            return JSON.stringify({status: "error", message: err.message});
         }
         """
         response_raw = self._run_jxa(jxa_check)
@@ -159,26 +160,40 @@ class AppleMusicIPCEngine:
         escaped_playlist = self._escape_quote(self.playlist_name)
 
         jxa_mutation = f"""
-        var searchResults = Music.search("{escaped_artist}", {{for: "shared"}});
-        if (searchResults && searchResults.songs.length > 0) {{
+        var playlist = Music.playlists()[0];
+        var searchResults = Music.search(playlist, {{for: "{escaped_artist}"}});
+        if (searchResults && searchResults.length > 0) {{
             var targetPlaylist = Music.userPlaylists.byName("{escaped_playlist}");
+            var targetTracks = targetPlaylist.tracks();
+            var existingDbIds = {{}};
+            for (var j = 0; j < targetTracks.length; j++) {{
+                existingDbIds[targetTracks[j].databaseID()] = true;
+            }}
+            
             var tracksAdded = 0;
             var addedIds = [];
+            var matchedArtist = false;
             
-            for (var i = 0; i < searchResults.songs.length; i++) {{
-                if (tracksAdded >= {tracks_per_artist}) break;
-                var song = searchResults.songs[i];
+            for (var i = 0; i < searchResults.length; i++) {{
+                var song = searchResults[i];
                 var songArtist = song.artist().toLowerCase();
                 var targetArtist = "{escaped_artist.lower()}";
                 
                 if (songArtist.includes(targetArtist) || targetArtist.includes(songArtist)) {{
+                    matchedArtist = true;
+                    if (tracksAdded >= {tracks_per_artist}) continue;
+                    
+                    if (existingDbIds[song.databaseID()]) {{
+                        continue; // Skip track if it is already in the playlist
+                    }}
                     song.duplicate({{to: targetPlaylist}});
+                    existingDbIds[song.databaseID()] = true; // Mark as added to prevent in-run duplication
                     tracksAdded++;
                     addedIds.push(song.id());
                 }}
             }}
             
-            if (tracksAdded > 0) {{
+            if (matchedArtist) {{
                 return JSON.stringify({{status: "success", count: tracksAdded, ids: addedIds}});
             }} else {{
                 return JSON.stringify({{status: "not_found", message: "No tracks matching artist name boundaries."}});

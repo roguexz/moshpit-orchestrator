@@ -11,6 +11,8 @@ from moshpit.logger import setup_logger
 from moshpit.config import settings
 from moshpit.ingest import WebScraperIngester, VisualIngester, clean_artist_name
 from moshpit.ipc import AppleMusicIPCEngine
+from moshpit.cache import MoshpitCache
+from datetime import datetime, timezone
 
 app = typer.Typer(help="Moshpit Orchestrator: Apple Music Playlist Generator")
 
@@ -41,6 +43,55 @@ def validate_input(input_path: str):
         )
 
 
+def get_suggested_tracks(artist: str, count: int = 3) -> list[str]:
+    """Retrieves suggested top tracks for an artist from iTunes Search API, falling back to local LLM."""
+    import requests
+    import json
+
+    # 1. Try iTunes Search API
+    try:
+        url = "https://itunes.apple.com/search"
+        params = {"term": artist, "entity": "song", "limit": str(count)}
+        resp = requests.get(url, params=params, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            songs = []
+            for item in data.get("results", []):
+                item_artist = item.get("artistName", "").lower()
+                if artist.lower() in item_artist or item_artist in artist.lower():
+                    track_name = item.get("trackName")
+                    if track_name and track_name not in songs:
+                        songs.append(track_name)
+            if songs:
+                return songs
+    except Exception as e:
+        logger.debug(f"iTunes API suggestion failed for artist '{artist}': {e}")
+
+    # 2. Fallback to local LLM
+    try:
+        from moshpit.ingest.base import BaseIngester
+        from moshpit.ingest.normalizer import extract_json_block
+
+        class SuggestionHelper(BaseIngester):
+            def extract_artists(self, input_path: str) -> list[str]:
+                return []
+
+        helper = SuggestionHelper(settings)
+        prompt = (
+            f"Identify the top {count} most popular or representative songs of the artist or band '{artist}'. "
+            f"Respond with a JSON object containing a 'songs' key mapping to a list of strings (the song names). "
+            f"Do not include any explanation or markdown formatting other than the JSON block."
+        )
+        raw_resp = helper.query_llm(prompt)
+        data = json.loads(extract_json_block(raw_resp))
+        if data and "songs" in data:
+            return [str(s) for s in data["songs"]]
+    except Exception as e:
+        logger.debug(f"LLM suggestion fallback failed for artist '{artist}': {e}")
+
+    return []
+
+
 @app.command()
 def run(
     input_path: str = typer.Argument(
@@ -63,11 +114,22 @@ def run(
         "--dry-run",
         help="Extract artists and search catalog, but do not modify the playlist.",
     ),
+    print_artists: bool = typer.Option(
+        False,
+        "--print-artists",
+        help="Only extract and print the list of artists to stdout, then exit.",
+    ),
     verbose: bool = typer.Option(
         False,
         "--verbose",
         "-v",
         help="Enable debug logging output.",
+    ),
+    force_refresh: bool = typer.Option(
+        False,
+        "--force-refresh",
+        "-f",
+        help="Force refresh and bypass cache for playlist sync and artist search.",
     ),
 ):
     """
@@ -80,11 +142,12 @@ def run(
     logger.info("Initializing Moshpit Orchestrator runtime environment...")
 
     # 2. Validate platform and input
-    try:
-        validate_platform()
-    except PlatformNotSupportedError as e:
-        logger.error(str(e))
-        raise typer.Exit(code=1)
+    if not print_artists:
+        try:
+            validate_platform()
+        except PlatformNotSupportedError as e:
+            logger.error(str(e))
+            raise typer.Exit(code=1)
 
     try:
         validate_input(input_path)
@@ -120,6 +183,11 @@ def run(
         logger.error("No valid artist names could be extracted from the input source.")
         raise typer.Exit(code=1)
 
+    if print_artists:
+        for artist in artists:
+            print(artist)
+        return
+
     # 4. Generate default playlist name if not provided
     target_playlist = playlist
     if not target_playlist:
@@ -134,6 +202,21 @@ def run(
             target_playlist = f"{name_base.capitalize()} Playlist"
 
     logger.info(f"Targeting Apple Music playlist: '{target_playlist}'")
+
+    # Check playlist sync cache
+    cache = MoshpitCache()
+    if not force_refresh:
+        last_sync = cache.get_playlist_last_sync(target_playlist)
+        if last_sync:
+            if last_sync.tzinfo is None:
+                last_sync = last_sync.replace(tzinfo=timezone.utc)
+            delta = datetime.now(timezone.utc) - last_sync
+            if delta.total_seconds() < 24 * 3600:
+                logger.info(
+                    f"Playlist '{target_playlist}' was updated less than 24 hours ago. "
+                    "Skipping update. Use --force-refresh to override."
+                )
+                return
 
     # 5. Initialize IPC engine
     try:
@@ -156,35 +239,113 @@ def run(
     for artist in artists:
         logger.info(f"Processing artist: '{artist}'...")
         try:
-            res = engine.append_top_tracks(artist, tracks_per_artist)
-            if res.get("status") == "success":
-                logger.info(
-                    f"Successfully added {res.get('count')} tracks for '{artist}'."
-                )
-            elif res.get("status") == "not_found":
-                logger.warning(
-                    f"No catalog matches found for artist '{artist}': {res.get('message')}"
-                )
-                unresolved_matches.append(
-                    {
-                        "artist": artist,
-                        "reason": "NOT_FOUND",
-                        "details": res.get(
-                            "message", "No matching songs found in shared catalog."
-                        ),
-                    }
-                )
-            else:
-                logger.error(f"JXA error for artist '{artist}': {res.get('message')}")
-                unresolved_matches.append(
-                    {
-                        "artist": artist,
-                        "reason": "IPC_EXCEPTION",
-                        "details": res.get(
-                            "message", "Error returned from JXA engine."
-                        ),
-                    }
-                )
+            # Check artist search cache
+            cached_found = False
+            if not force_refresh:
+                cached = cache.get_artist_cache(artist)
+                if cached:
+                    last_search = cached["last_searched_at"]
+                    if last_search.tzinfo is None:
+                        last_search = last_search.replace(tzinfo=timezone.utc)
+                    delta = datetime.now(timezone.utc) - last_search
+                    if delta.total_seconds() < 24 * 3600:
+                        status = cached["status"]
+                        results = cached["results"]
+                        logger.info(
+                            f"[CACHE HIT] Reusing cached search result for artist '{artist}' (searched {last_search.isoformat()})."
+                        )
+                        if status == "success":
+                            res = engine.append_top_tracks(artist, tracks_per_artist)
+                            if res.get("status") == "success":
+                                logger.info(
+                                    f"Successfully added {res.get('count')} tracks for '{artist}'."
+                                )
+                            elif res.get("status") == "not_found":
+                                logger.warning(
+                                    f"No catalog matches found for artist '{artist}': {res.get('message')}"
+                                )
+                                unresolved_matches.append(
+                                    {
+                                        "artist": artist,
+                                        "reason": "NOT_FOUND",
+                                        "details": res.get(
+                                            "message",
+                                            "No matching songs found in shared catalog.",
+                                        ),
+                                        "suggested_top_tracks": [],
+                                    }
+                                )
+                            else:
+                                logger.error(
+                                    f"JXA error for artist '{artist}': {res.get('message')}"
+                                )
+                                unresolved_matches.append(
+                                    {
+                                        "artist": artist,
+                                        "reason": "IPC_EXCEPTION",
+                                        "details": res.get(
+                                            "message", "Error returned from JXA engine."
+                                        ),
+                                    }
+                                )
+                        elif status == "not_found":
+                            logger.warning(
+                                f"No catalog matches found for artist '{artist}' (Cached)."
+                            )
+                            if results:
+                                logger.warning(
+                                    f"Suggested tracks to add to your library (Cached): {', '.join(results)}"
+                                )
+                            unresolved_matches.append(
+                                {
+                                    "artist": artist,
+                                    "reason": "NOT_FOUND",
+                                    "details": "No matching songs found in shared catalog (Cached).",
+                                    "suggested_top_tracks": results,
+                                }
+                            )
+                        cached_found = True
+
+            if not cached_found:
+                res = engine.append_top_tracks(artist, tracks_per_artist)
+                if res.get("status") == "success":
+                    logger.info(
+                        f"Successfully added {res.get('count')} tracks for '{artist}'."
+                    )
+                    cache.update_artist_cache(artist, "success", [])
+                elif res.get("status") == "not_found":
+                    logger.warning(
+                        f"No catalog matches found for artist '{artist}': {res.get('message')}"
+                    )
+                    suggested = get_suggested_tracks(artist, tracks_per_artist)
+                    if suggested:
+                        logger.warning(
+                            f"Suggested tracks to add to your library: {', '.join(suggested)}"
+                        )
+                    cache.update_artist_cache(artist, "not_found", suggested)
+                    unresolved_matches.append(
+                        {
+                            "artist": artist,
+                            "reason": "NOT_FOUND",
+                            "details": res.get(
+                                "message", "No matching songs found in shared catalog."
+                            ),
+                            "suggested_top_tracks": suggested,
+                        }
+                    )
+                else:
+                    logger.error(
+                        f"JXA error for artist '{artist}': {res.get('message')}"
+                    )
+                    unresolved_matches.append(
+                        {
+                            "artist": artist,
+                            "reason": "IPC_EXCEPTION",
+                            "details": res.get(
+                                "message", "Error returned from JXA engine."
+                            ),
+                        }
+                    )
         except Exception as e:
             logger.error(f"Unexpected error matching artist '{artist}': {e}")
             unresolved_matches.append(
@@ -215,6 +376,9 @@ def run(
         logger.info(
             "Synchronization completed successfully with zero unresolved matches!"
         )
+
+    # Update playlist sync cache
+    cache.update_playlist_sync(target_playlist)
 
 
 if __name__ == "__main__":

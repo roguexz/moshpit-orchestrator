@@ -12,10 +12,19 @@ class WebScraperIngester(BaseIngester):
 
     def extract_artists(self, url: str) -> list[str]:
         """
-        Fetches the web page, cleans the layout, and extracts artists using Ollama.
+        Fetches the web page, cleans the layout, and extracts artists using the local LLM.
         """
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+        }
         try:
-            response = requests.get(url, timeout=self.config.ollama_timeout)
+            response = requests.get(
+                url, headers=headers, timeout=self.config.llm_timeout
+            )
             response.raise_for_status()
         except requests.RequestException as e:
             raise MoshpitException(f"Failed to fetch webpage at {url}: {e}")
@@ -45,5 +54,5 @@ class WebScraperIngester(BaseIngester):
             f"Event details:\n{cleaned_text}"
         )
 
-        raw_llm_output = self.query_ollama(prompt)
+        raw_llm_output = self.query_llm(prompt)
         return self.parse_and_validate_artists(raw_llm_output)

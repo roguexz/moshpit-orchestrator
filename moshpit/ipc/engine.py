@@ -155,7 +155,12 @@ class AppleMusicIPCEngine:
     def append_top_tracks(
         self, artist_name: str, tracks_per_artist: int = 3
     ) -> Dict[str, Any]:
-        """Queries the Apple Music Catalog and duplicates top tracks to target playlist."""
+        """Queries the Apple Music Catalog and duplicates top tracks to target playlist.
+
+        Note: This is the legacy method that searches by artist name only.
+        Prefer append_resolved_tracks() with pre-resolved track names for
+        better catalog hit rates.
+        """
         escaped_artist = self._escape_quote(artist_name)
         escaped_playlist = self._escape_quote(self.playlist_name)
 
@@ -213,6 +218,165 @@ class AppleMusicIPCEngine:
                 "status": "error",
                 "message": f"Invalid JSON returned: {response_raw}",
             }
+
+    def add_track_by_name(
+        self, song_title: str, artist_name: str
+    ) -> Dict[str, Any]:
+        """Searches Apple Music catalog for a specific song by title+artist and adds it to the playlist.
+
+        Uses a multi-strategy search to maximize catalog hit rates:
+          1. Song title only (most specific — avoids stopword noise from artist names)
+          2. Combined "artist songTitle" (for disambiguation)
+          3. Artist name only (broadest, last resort)
+        Each strategy verifies both artist AND title match before adding.
+        Returns a dict with 'status' key: 'success', 'not_found', 'skipped', or 'error'.
+        """
+        escaped_artist = self._escape_quote(artist_name)
+        escaped_title = self._escape_quote(song_title)
+        escaped_playlist = self._escape_quote(self.playlist_name)
+
+        jxa_script = f"""
+        var playlist = Music.playlists()[0];
+        var targetPlaylist = Music.userPlaylists.byName("{escaped_playlist}");
+        var targetTracks = targetPlaylist.tracks();
+        var existingDbIds = {{}};
+        for (var j = 0; j < targetTracks.length; j++) {{
+            existingDbIds[targetTracks[j].databaseID()] = true;
+        }}
+
+        var targetArtist = "{escaped_artist.lower()}";
+        var targetTitle = "{escaped_title.lower()}";
+
+        // Helper: scan search results for an artist+title match
+        function findMatch(results) {{
+            if (!results || results.length === 0) return null;
+            for (var i = 0; i < results.length; i++) {{
+                var song = results[i];
+                var songArtist = song.artist().toLowerCase();
+                var songName = song.name().toLowerCase();
+
+                var artistMatch = songArtist.includes(targetArtist) || targetArtist.includes(songArtist);
+                var titleMatch = songName.includes(targetTitle) || targetTitle.includes(songName);
+
+                if (artistMatch && titleMatch) {{
+                    return song;
+                }}
+            }}
+            return null;
+        }}
+
+        // Strategy 1: Search by song title only (most specific, avoids stopword noise)
+        var match = findMatch(Music.search(playlist, {{for: "{escaped_title}"}}));
+
+        // Strategy 2: Search by combined "artist songTitle"
+        if (!match) {{
+            match = findMatch(Music.search(playlist, {{for: "{escaped_artist} {escaped_title}"}}));
+        }}
+
+        // Strategy 3: Search by artist name only (broadest)
+        if (!match) {{
+            match = findMatch(Music.search(playlist, {{for: "{escaped_artist}"}}));
+        }}
+
+        if (!match) {{
+            return JSON.stringify({{
+                status: "not_found",
+                message: "No catalog match for: {escaped_artist} - {escaped_title}"
+            }});
+        }}
+
+        // Idempotency: skip if already in the playlist
+        if (existingDbIds[match.databaseID()]) {{
+            return JSON.stringify({{
+                status: "skipped",
+                message: "Track already in playlist",
+                track: match.name(),
+                artist: match.artist()
+            }});
+        }}
+
+        match.duplicate({{to: targetPlaylist}});
+        return JSON.stringify({{
+            status: "success",
+            track: match.name(),
+            artist: match.artist(),
+            id: match.id()
+        }});
+        """
+        response_raw = self._run_jxa(jxa_script)
+        if not response_raw:
+            return {"status": "error", "message": "Empty response from JXA automation"}
+
+        try:
+            return json.loads(response_raw)
+        except json.JSONDecodeError:
+            return {
+                "status": "error",
+                "message": f"Invalid JSON returned: {response_raw}",
+            }
+
+    def append_resolved_tracks(
+        self, artist_name: str, tracks: list, delay: float = 0.5
+    ) -> Dict[str, Any]:
+        """Iterates through resolved TrackSuggestion objects and adds each to the playlist.
+
+        Returns a summary dict with counts of added, skipped, and failed tracks.
+        The `tracks` parameter accepts a list of TrackSuggestion objects (or dicts
+        with 'title' and 'artist' keys).
+        """
+        added = 0
+        skipped = 0
+        failed = 0
+        failed_tracks: List[Dict[str, str]] = []
+
+        for track in tracks:
+            # Support both TrackSuggestion objects and plain dicts
+            title = track.title if hasattr(track, "title") else track.get("title", "")
+            artist = (
+                track.artist if hasattr(track, "artist") else track.get("artist", artist_name)
+            )
+
+            if not title:
+                continue
+
+            try:
+                result = self.add_track_by_name(title, artist)
+                status = result.get("status", "error")
+
+                if status == "success":
+                    added += 1
+                    logger.info(
+                        f"  ✓ Added: '{result.get('track', title)}' by {result.get('artist', artist)}"
+                    )
+                elif status == "skipped":
+                    skipped += 1
+                    logger.debug(
+                        f"  → Skipped (already in playlist): '{title}' by {artist}"
+                    )
+                else:
+                    failed += 1
+                    failed_tracks.append(
+                        {"title": title, "artist": artist, "reason": result.get("message", "")}
+                    )
+                    logger.debug(
+                        f"  ✗ Not found: '{title}' by {artist} — {result.get('message', '')}"
+                    )
+            except Exception as e:
+                failed += 1
+                failed_tracks.append(
+                    {"title": title, "artist": artist, "reason": str(e)}
+                )
+                logger.debug(f"  ✗ Error adding '{title}' by {artist}: {e}")
+
+            time.sleep(delay)
+
+        return {
+            "status": "success" if added > 0 else "not_found",
+            "added": added,
+            "skipped": skipped,
+            "failed": failed,
+            "failed_tracks": failed_tracks,
+        }
 
     def write_failure_manifest(
         self, unresolved_matches: List[Dict[str, Any]], total_submitted: int

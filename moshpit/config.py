@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     )
     default_tracks_per_artist: int = 20
     jxa_timeout: float = 30.0
+    storefront: str = "us"
+    resolver_delay: float = 1.0
 
     model_config = SettingsConfigDict(
         env_prefix="MOSHPIT_",

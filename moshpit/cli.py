@@ -10,7 +10,8 @@ from moshpit.exceptions import PlatformNotSupportedError
 from moshpit.logger import setup_logger
 from moshpit.config import settings
 from moshpit.ingest import WebScraperIngester, VisualIngester, clean_artist_name
-from moshpit.ipc import AppleMusicIPCEngine
+from moshpit.resolver import TopTracksResolver
+from moshpit.ipc import AppleMusicWebEngine
 from moshpit.cache import MoshpitCache
 from datetime import datetime, timezone
 
@@ -110,9 +111,13 @@ def run(
         help="Number of top tracks to add per artist.",
     ),
     dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        help="Extract artists and search catalog, but do not modify the playlist.",
+        False, "--dry-run", help="Resolve tracks but do not modify Apple Music library."
+    ),
+    storefront: str = typer.Option(
+        "us",
+        "--storefront",
+        "-s",
+        help="The Apple Music storefront to use (e.g. us, in).",
     ),
     print_artists: bool = typer.Option(
         False,
@@ -220,137 +225,119 @@ def run(
 
     # 5. Initialize IPC engine
     try:
-        engine = AppleMusicIPCEngine(target_playlist)
+        engine = AppleMusicWebEngine(target_playlist, storefront=storefront)
     except Exception as e:
         logger.error(f"Failed to initialize Apple Music connection: {e}")
         raise typer.Exit(code=1)
 
     if dry_run:
-        logger.info("Dry-run mode enabled. Simulating track synchronization...")
-        for artist in artists:
-            logger.info(f"[DRY-RUN] Would search and add tracks for artist: {artist}")
-        logger.info("Dry-run execution completed successfully.")
-        return
+        logger.info("Dry-run mode enabled. Simulating track synchronization... (Will resolve tracks but skip playlist addition)")
 
     # 6. Synchronization Loop
+    resolver = TopTracksResolver()
     unresolved_matches = []
+    total_added = 0
+    total_skipped = 0
     logger.info(f"Starting track synchronization for {len(artists)} artists...")
 
     for artist in artists:
         logger.info(f"Processing artist: '{artist}'...")
         try:
             # Check artist search cache
-            cached_found = False
+            resolved_tracks = None
             if not force_refresh:
                 cached = cache.get_artist_cache(artist)
                 if cached:
                     last_search = cached["last_searched_at"]
                     if last_search.tzinfo is None:
                         last_search = last_search.replace(tzinfo=timezone.utc)
-                    delta = datetime.now(timezone.utc) - last_search
-                    if delta.total_seconds() < 24 * 3600:
-                        status = cached["status"]
-                        results = cached["results"]
-                        logger.info(
-                            f"[CACHE HIT] Reusing cached search result for artist '{artist}' (searched {last_search.isoformat()})."
-                        )
-                        if status == "success":
-                            res = engine.append_top_tracks(artist, tracks_per_artist)
-                            if res.get("status") == "success":
-                                logger.info(
-                                    f"Successfully added {res.get('count')} tracks for '{artist}'."
-                                )
-                            elif res.get("status") == "not_found":
-                                logger.warning(
-                                    f"No catalog matches found for artist '{artist}': {res.get('message')}"
-                                )
-                                unresolved_matches.append(
-                                    {
-                                        "artist": artist,
-                                        "reason": "NOT_FOUND",
-                                        "details": res.get(
-                                            "message",
-                                            "No matching songs found in shared catalog.",
-                                        ),
-                                        "suggested_top_tracks": [],
-                                    }
-                                )
-                            else:
-                                logger.error(
-                                    f"JXA error for artist '{artist}': {res.get('message')}"
-                                )
-                                unresolved_matches.append(
-                                    {
-                                        "artist": artist,
-                                        "reason": "IPC_EXCEPTION",
-                                        "details": res.get(
-                                            "message", "Error returned from JXA engine."
-                                        ),
-                                    }
-                                )
+                    if (datetime.now(timezone.utc) - last_search).days < 7:
+                        status = cached.get("status")
+                        results = cached.get("tracks", [])
+                        if status == "success" and results:
+                            from moshpit.resolver import TrackSuggestion
+                            resolved_tracks = [TrackSuggestion(**t) for t in results]
+                            logger.info(f"Loaded {len(resolved_tracks)} tracks from local cache for '{artist}'")
                         elif status == "not_found":
-                            logger.warning(
-                                f"No catalog matches found for artist '{artist}' (Cached)."
-                            )
-                            if results:
-                                logger.warning(
-                                    f"Suggested tracks to add to your library (Cached): {', '.join(results)}"
-                                )
-                            unresolved_matches.append(
-                                {
-                                    "artist": artist,
-                                    "reason": "NOT_FOUND",
-                                    "details": "No matching songs found in shared catalog (Cached).",
-                                    "suggested_top_tracks": results,
-                                }
-                            )
-                        cached_found = True
+                            logger.warning(f"Artist '{artist}' was previously unresolved (cached). Skipping.")
+                            unresolved_matches.append({
+                                "artist": artist,
+                                "reason": "NOT_FOUND",
+                                "details": "No tracks could be resolved (cached).",
+                                "suggested_top_tracks": [r.get("title", r) if isinstance(r, dict) else r for r in results] if results else []
+                            })
+                            continue
 
-            if not cached_found:
-                res = engine.append_top_tracks(artist, tracks_per_artist)
-                if res.get("status") == "success":
+            if resolved_tracks is None:
+                logger.info(f"Resolving top tracks for '{artist}'...")
+                tracks = resolver.resolve(artist, tracks_per_artist)
+                if tracks:
+                    resolved_tracks = [t.to_dict() for t in tracks]
+                    logger.info(f"Resolved {len(resolved_tracks)} tracks for '{artist}' (sources: {', '.join(set(t.source for t in tracks))})")
+                    cache.update_artist_cache(artist, "success", resolved_tracks)
+                else:
+                    logger.warning(f"No tracks resolved for artist '{artist}'.")
+                    cache.update_artist_cache(artist, "not_found", [])
+                    unresolved_matches.append({
+                        "artist": artist,
+                        "reason": "NOT_FOUND",
+                        "details": "Resolver chain returned zero tracks.",
+                        "suggested_top_tracks": [],
+                    })
+                    continue
+
+
+            if resolved_tracks:
+                if dry_run:
+                    logger.info(f"[DRY-RUN] Would add {len(resolved_tracks)} tracks for '{artist}' to playlist.")
+                    continue
+                    
+                # Add resolved tracks to playlist via engine (per-track)
+                logger.info(
+                    f"Adding {len(resolved_tracks)} resolved tracks for '{artist}' to playlist..."
+                )
+                from moshpit.resolver import TrackSuggestion
+                if isinstance(resolved_tracks[0], dict):
+                    suggestions = [TrackSuggestion(**t) for t in resolved_tracks]
+                else:
+                    suggestions = resolved_tracks
+
+                result = engine.append_resolved_tracks(
+                    artist, suggestions, delay=settings.resolver_delay
+                )
+                added = result.get("added", 0)
+                skipped = result.get("skipped", 0)
+                failed = result.get("failed", 0)
+                total_added += added
+                total_skipped += skipped
+
+                if added > 0:
                     logger.info(
-                        f"Successfully added {res.get('count')} tracks for '{artist}'."
+                        f"Successfully added {added} tracks for '{artist}' "
+                        f"({skipped} skipped, {failed} not found in catalog)."
                     )
-                    cache.update_artist_cache(artist, "success", [])
-                elif res.get("status") == "not_found":
-                    logger.warning(
-                        f"No catalog matches found for artist '{artist}': {res.get('message')}"
-                    )
-                    suggested = get_suggested_tracks(artist, tracks_per_artist)
-                    if suggested:
-                        logger.warning(
-                            f"Suggested tracks to add to your library: {', '.join(suggested)}"
-                        )
-                    cache.update_artist_cache(artist, "not_found", suggested)
-                    unresolved_matches.append(
-                        {
-                            "artist": artist,
-                            "reason": "NOT_FOUND",
-                            "details": res.get(
-                                "message", "No matching songs found in shared catalog."
-                            ),
-                            "suggested_top_tracks": suggested,
-                        }
+                elif skipped > 0 and failed == 0:
+                    logger.info(
+                        f"All {skipped} tracks for '{artist}' already in playlist (idempotent)."
                     )
                 else:
-                    logger.error(
-                        f"JXA error for artist '{artist}': {res.get('message')}"
+                    logger.warning(
+                        f"No tracks could be added for '{artist}' ({failed} not found in catalog)."
                     )
+                    failed_tracks = result.get("failed_tracks", [])
                     unresolved_matches.append(
                         {
                             "artist": artist,
-                            "reason": "IPC_EXCEPTION",
-                            "details": res.get(
-                                "message", "Error returned from JXA engine."
-                            ),
+                            "reason": "CATALOG_MISS",
+                            "details": f"Resolved tracks but {failed} failed catalog search.",
+                            "suggested_top_tracks": [
+                                ft.get("title", "") for ft in failed_tracks
+                            ],
                         }
                     )
         except Exception as e:
             logger.error(f"Unexpected error matching artist '{artist}': {e}")
-            unresolved_matches.append(
-                {"artist": artist, "reason": "IPC_EXCEPTION", "details": str(e)}
-            )
+            unresolved_matches.append({"artist": artist, "reason": "SYSTEM_ERROR", "details": str(e)})
 
         # Rate-limiting delay to mitigate events thread thrashing
         time.sleep(0.5)
@@ -376,6 +363,10 @@ def run(
         logger.info(
             "Synchronization completed successfully with zero unresolved matches!"
         )
+
+    # Clean up engine resources (Playwright browser session)
+    if hasattr(engine, 'close'):
+        engine.close()
 
     # Update playlist sync cache
     cache.update_playlist_sync(target_playlist)

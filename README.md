@@ -2,8 +2,9 @@
 
 Moshpit Orchestrator is a local, privacy-first Apple Music playlist generator. It processes multi-modal assets — such as
 event webpage URLs, concert posters, or plain text files—using local OpenAI-compatible LLMs (such as Ollama, oMLX, LM
-Studio, or vLLM) to extract artist lineups, and then automates Apple Music via macOS JavaScript for Automation (JXA) to
-compile top tracks into a playlist.
+Studio, or vLLM) to extract artist lineups. It resolves top tracks via fallback APIs (iTunes, Last.fm, MusicBrainz) and
+automates the Apple Music web player via Playwright (leveraging local macOS JXA for caching) to compile tracks into a
+playlist.
 
 ## Prerequisites
 
@@ -13,6 +14,7 @@ compile top tracks into a playlist.
   vLLM).
 - **Terminal Permissions**: When running the script, macOS will prompt you to grant Terminal or your IDE permission to
   control "System Events" and "Music". You must grant these automation permissions.
+- **Playwright Browsers**: Requires Chromium browser binaries for headless web automation.
 
 ## Installation
 
@@ -25,8 +27,9 @@ We standardize on `uv` for package and environment management.
 2. Clone the repository and install dependencies:
    ```bash
    make install
+   uv run playwright install chromium
    ```
-   This will automatically create a virtual environment (`.venv`) and sync all packages.
+   This will automatically create a virtual environment (`.venv`), sync all packages, and install browser binaries.
 
 ## Configuration
 
@@ -127,8 +130,10 @@ uv run moshpit run [OPTIONS] INPUT_PATH
 - `INPUT_PATH`: Path to local image file, text file, or schedule HTTP/HTTPS URL.
 - `-p, --playlist TEXT`: Name of the target Apple Music playlist. If omitted, the name is auto-generated from the
   filename or URL domain.
+- `-s, --storefront TEXT`: The Apple Music storefront region to use (e.g. `us`, `in`, `gb`) for catalog searches (
+  default: `us`).
 - `-t, --tracks-per-artist INTEGER`: Overrides the number of top tracks to append per artist (default: `3`).
-- `--dry-run`: Extracts artists and performs Apple Music catalog checks, but does **not** modify or create any
+- `--dry-run`: Extracts artists and performs track resolution checks, but does **not** modify or create any
   playlists.
 - `--print-artists`: Extracts and prints the list of artists to standard output, then exits immediately. This option
   skips JXA/macOS validation checks, allowing you to test extraction on non-macOS platforms.

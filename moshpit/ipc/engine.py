@@ -219,9 +219,7 @@ class AppleMusicIPCEngine:
                 "message": f"Invalid JSON returned: {response_raw}",
             }
 
-    def add_track_by_name(
-        self, song_title: str, artist_name: str
-    ) -> Dict[str, Any]:
+    def add_track_by_name(self, song_title: str, artist_name: str) -> Dict[str, Any]:
         """Searches Apple Music catalog for a specific song by title+artist and adds it to the playlist.
 
         Uses a multi-strategy search to maximize catalog hit rates:
@@ -333,7 +331,9 @@ class AppleMusicIPCEngine:
             # Support both TrackSuggestion objects and plain dicts
             title = track.title if hasattr(track, "title") else track.get("title", "")
             artist = (
-                track.artist if hasattr(track, "artist") else track.get("artist", artist_name)
+                track.artist
+                if hasattr(track, "artist")
+                else track.get("artist", artist_name)
             )
 
             if not title:
@@ -356,7 +356,11 @@ class AppleMusicIPCEngine:
                 else:
                     failed += 1
                     failed_tracks.append(
-                        {"title": title, "artist": artist, "reason": result.get("message", "")}
+                        {
+                            "title": title,
+                            "artist": artist,
+                            "reason": result.get("message", ""),
+                        }
                     )
                     logger.debug(
                         f"  ✗ Not found: '{title}' by {artist} — {result.get('message', '')}"
@@ -406,3 +410,104 @@ class AppleMusicIPCEngine:
         except IOError as e:
             logger.error(f"Failed to write failure manifest: {e}")
             return ""
+
+    def get_playlist_tracks(self) -> List[Dict[str, Any]]:
+        """
+        Retrieves all tracks currently in the target playlist.
+        Each track is a dictionary containing: id, databaseID, name, artist, and album.
+        """
+        escaped_playlist = self._escape_quote(self.playlist_name)
+        jxa_query = f"""
+        var playlists = Music.userPlaylists;
+        var targetPlaylist = null;
+        for (var i = 0; i < playlists.length; i++) {{
+            if (playlists[i].name() === "{escaped_playlist}") {{
+                targetPlaylist = playlists[i];
+                break;
+            }}
+        }}
+        if (!targetPlaylist) {{
+            return JSON.stringify({{status: "error", message: "Playlist not found"}});
+        }}
+        var tracksSpec = targetPlaylist.tracks;
+        var ids = tracksSpec.id();
+        var dbIds = tracksSpec.databaseID();
+        var names = tracksSpec.name();
+        var artists = tracksSpec.artist();
+        var albums = tracksSpec.album();
+        var out = [];
+        for (var j = 0; j < ids.length; j++) {{
+            out.push({{
+                id: ids[j],
+                databaseID: dbIds[j],
+                name: names[j],
+                artist: artists[j],
+                album: albums[j]
+            }});
+        }}
+        return JSON.stringify({{status: "success", tracks: out}});
+        """
+        response_raw = self._run_jxa(jxa_query)
+        if not response_raw:
+            raise MusicAppException("Empty response while reading playlist tracks.")
+        try:
+            data = json.loads(response_raw)
+            if data.get("status") == "error":
+                raise MusicAppException(
+                    f"Failed to read playlist tracks: {data.get('message')}"
+                )
+            return data.get("tracks", [])
+        except json.JSONDecodeError:
+            raise MusicAppException(
+                f"Invalid JSON returned from JXA track query: {response_raw}"
+            )
+
+    def delete_tracks_by_id(self, track_ids: List[Any]) -> int:
+        """
+        Deletes tracks from the target playlist matching the provided unique track IDs.
+        Returns the number of deleted tracks.
+        """
+        if not track_ids:
+            return 0
+        escaped_playlist = self._escape_quote(self.playlist_name)
+        js_track_ids = json.dumps(track_ids)
+        jxa_mutation = f"""
+        var playlists = Music.userPlaylists;
+        var targetPlaylist = null;
+        for (var i = 0; i < playlists.length; i++) {{
+            if (playlists[i].name() === "{escaped_playlist}") {{
+                targetPlaylist = playlists[i];
+                break;
+            }}
+        }}
+        if (!targetPlaylist) {{
+            return JSON.stringify({{status: "error", message: "Playlist not found"}});
+        }}
+        var tracks = targetPlaylist.tracks();
+        var count = 0;
+        var toDelete = {js_track_ids};
+        for (var j = tracks.length - 1; j >= 0; j--) {{
+            try {{
+                var trackId = tracks[j].id();
+                if (toDelete.indexOf(trackId) !== -1) {{
+                    tracks[j].delete();
+                    count++;
+                }}
+            }} catch (e) {{}}
+        }}
+        return JSON.stringify({{status: "success", count: count}});
+        """
+        response_raw = self._run_jxa(jxa_mutation)
+        if not response_raw:
+            raise MusicAppException("Empty response while deleting tracks.")
+        try:
+            data = json.loads(response_raw)
+            if data.get("status") == "error":
+                raise MusicAppException(
+                    f"Failed to delete playlist tracks: {data.get('message')}"
+                )
+            return data.get("count", 0)
+        except json.JSONDecodeError:
+            raise MusicAppException(
+                f"Invalid JSON returned from JXA deletion: {response_raw}"
+            )

@@ -1,7 +1,7 @@
 import os
 import sys
 import time
-from typing import Optional
+from typing import Optional, List, Any
 from urllib.parse import urlparse
 import typer
 from loguru import logger
@@ -11,7 +11,7 @@ from moshpit.logger import setup_logger
 from moshpit.config import settings
 from moshpit.ingest import WebScraperIngester, VisualIngester, clean_artist_name
 from moshpit.resolver import TopTracksResolver
-from moshpit.ipc import AppleMusicWebEngine
+from moshpit.ipc import AppleMusicWebEngine, AppleMusicIPCEngine
 from moshpit.cache import MoshpitCache
 from datetime import datetime, timezone
 
@@ -188,6 +188,9 @@ def run(
         logger.error("No valid artist names could be extracted from the input source.")
         raise typer.Exit(code=1)
 
+    # Deduplicate extracted artist names while preserving order
+    artists = list(dict.fromkeys(artists))
+
     if print_artists:
         for artist in artists:
             print(artist)
@@ -231,7 +234,9 @@ def run(
         raise typer.Exit(code=1)
 
     if dry_run:
-        logger.info("Dry-run mode enabled. Simulating track synchronization... (Will resolve tracks but skip playlist addition)")
+        logger.info(
+            "Dry-run mode enabled. Simulating track synchronization... (Will resolve tracks but skip playlist addition)"
+        )
 
     # 6. Synchronization Loop
     resolver = TopTracksResolver()
@@ -244,7 +249,7 @@ def run(
         logger.info(f"Processing artist: '{artist}'...")
         try:
             # Check artist search cache
-            resolved_tracks = None
+            resolved_tracks: Optional[List[Any]] = None
             if not force_refresh:
                 cached = cache.get_artist_cache(artist)
                 if cached:
@@ -256,16 +261,34 @@ def run(
                         results = cached.get("tracks", [])
                         if status == "success" and results:
                             from moshpit.resolver import TrackSuggestion
+
                             resolved_tracks = [TrackSuggestion(**t) for t in results]
-                            logger.info(f"Loaded {len(resolved_tracks)} tracks from local cache for '{artist}'")
+                            logger.info(
+                                f"Loaded {len(resolved_tracks)} tracks from local cache for '{artist}'"
+                            )
                         elif status == "not_found":
-                            logger.warning(f"Artist '{artist}' was previously unresolved (cached). Skipping.")
-                            unresolved_matches.append({
-                                "artist": artist,
-                                "reason": "NOT_FOUND",
-                                "details": "No tracks could be resolved (cached).",
-                                "suggested_top_tracks": [r.get("title", r) if isinstance(r, dict) else r for r in results] if results else []
-                            })
+                            logger.warning(
+                                f"Artist '{artist}' was previously unresolved (cached). Skipping."
+                            )
+                            unresolved_matches.append(
+                                {
+                                    "artist": artist,
+                                    "reason": "NOT_FOUND",
+                                    "details": "No tracks could be resolved (cached).",
+                                    "suggested_top_tracks": (
+                                        [
+                                            (
+                                                r.get("title", r)
+                                                if isinstance(r, dict)
+                                                else r
+                                            )
+                                            for r in results
+                                        ]
+                                        if results
+                                        else []
+                                    ),
+                                }
+                            )
                             continue
 
             if resolved_tracks is None:
@@ -273,30 +296,36 @@ def run(
                 tracks = resolver.resolve(artist, tracks_per_artist)
                 if tracks:
                     resolved_tracks = [t.to_dict() for t in tracks]
-                    logger.info(f"Resolved {len(resolved_tracks)} tracks for '{artist}' (sources: {', '.join(set(t.source for t in tracks))})")
+                    logger.info(
+                        f"Resolved {len(resolved_tracks)} tracks for '{artist}' (sources: {', '.join(set(t.source for t in tracks))})"
+                    )
                     cache.update_artist_cache(artist, "success", resolved_tracks)
                 else:
                     logger.warning(f"No tracks resolved for artist '{artist}'.")
                     cache.update_artist_cache(artist, "not_found", [])
-                    unresolved_matches.append({
-                        "artist": artist,
-                        "reason": "NOT_FOUND",
-                        "details": "Resolver chain returned zero tracks.",
-                        "suggested_top_tracks": [],
-                    })
+                    unresolved_matches.append(
+                        {
+                            "artist": artist,
+                            "reason": "NOT_FOUND",
+                            "details": "Resolver chain returned zero tracks.",
+                            "suggested_top_tracks": [],
+                        }
+                    )
                     continue
-
 
             if resolved_tracks:
                 if dry_run:
-                    logger.info(f"[DRY-RUN] Would add {len(resolved_tracks)} tracks for '{artist}' to playlist.")
+                    logger.info(
+                        f"[DRY-RUN] Would add {len(resolved_tracks)} tracks for '{artist}' to playlist."
+                    )
                     continue
-                    
+
                 # Add resolved tracks to playlist via engine (per-track)
                 logger.info(
                     f"Adding {len(resolved_tracks)} resolved tracks for '{artist}' to playlist..."
                 )
                 from moshpit.resolver import TrackSuggestion
+
                 if isinstance(resolved_tracks[0], dict):
                     suggestions = [TrackSuggestion(**t) for t in resolved_tracks]
                 else:
@@ -337,7 +366,9 @@ def run(
                     )
         except Exception as e:
             logger.error(f"Unexpected error matching artist '{artist}': {e}")
-            unresolved_matches.append({"artist": artist, "reason": "SYSTEM_ERROR", "details": str(e)})
+            unresolved_matches.append(
+                {"artist": artist, "reason": "SYSTEM_ERROR", "details": str(e)}
+            )
 
         # Rate-limiting delay to mitigate events thread thrashing
         time.sleep(0.5)
@@ -365,11 +396,223 @@ def run(
         )
 
     # Clean up engine resources (Playwright browser session)
-    if hasattr(engine, 'close'):
+    if hasattr(engine, "close"):
         engine.close()
 
     # Update playlist sync cache
     cache.update_playlist_sync(target_playlist)
+
+
+@app.command("analyze")
+def analyze_playlist(
+    playlist: str = typer.Option(
+        ..., "--playlist", "-p", help="Name of the target Apple Music playlist"
+    ),
+    list_artists: bool = typer.Option(
+        False, "--list-artists", help="List all unique artist names in the playlist"
+    ),
+    list_duplicates: bool = typer.Option(
+        False,
+        "--list-duplicates",
+        help="List all duplicate track versions in the playlist",
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Enable debug logging output"
+    ),
+):
+    """
+    Analyze an Apple Music playlist, showing stats, unique artists, or duplicate track versions.
+    """
+    log_level = "DEBUG" if verbose else "INFO"
+    setup_logger(level=log_level)
+    try:
+        validate_platform()
+    except PlatformNotSupportedError as e:
+        logger.error(str(e))
+        raise typer.Exit(code=1)
+
+    try:
+        engine = AppleMusicIPCEngine(playlist)
+    except Exception as e:
+        logger.error(f"Failed to initialize Apple Music connection: {e}")
+        raise typer.Exit(code=1)
+
+    try:
+        logger.info(f"Scanning playlist '{playlist}' for tracks...")
+        tracks = engine.get_playlist_tracks()
+
+        # 1. Total tracks
+        total_tracks = len(tracks)
+
+        # 2. Unique artists
+        artists = sorted(
+            list({t.get("artist", "").strip() for t in tracks if t.get("artist")})
+        )
+
+        # 3. Duplicate versions
+        from moshpit.dedup import identify_duplicates
+
+        duplicates = identify_duplicates(tracks)
+
+        # Default behavior: Print high-level overview if no specific list options are selected
+        if not list_artists and not list_duplicates:
+            typer.echo(f"Playlist '{playlist}' analysis summary:")
+            typer.echo(f"  - Total tracks: {total_tracks}")
+            typer.echo(f"  - Unique artists: {len(artists)}")
+            typer.echo(f"  - Duplicate track versions found: {len(duplicates)}")
+            typer.echo("Use --list-artists or --list-duplicates to see detailed lists.")
+            return
+
+        if list_artists:
+            if not artists:
+                typer.echo(
+                    f"No artists found in playlist '{playlist}' (or playlist is empty)."
+                )
+            else:
+                typer.echo(f"Unique artists in playlist '{playlist}':")
+                for artist in artists:
+                    typer.echo(artist)
+
+        if list_duplicates:
+            if not duplicates:
+                typer.echo(
+                    f"No duplicate tracks/versions found in playlist '{playlist}'."
+                )
+            else:
+                typer.echo(
+                    f"Duplicate/alternative track versions found in playlist '{playlist}':"
+                )
+                for dup in duplicates:
+                    typer.echo(
+                        f"  - '{dup.get('name')}' by {dup.get('artist')} (Album: {dup.get('album')})"
+                    )
+    except Exception as e:
+        logger.error(f"Failed to analyze playlist: {e}")
+        raise typer.Exit(code=1)
+    finally:
+        if hasattr(engine, "close"):
+            engine.close()
+
+
+@app.command("prune")
+def prune_playlist(
+    playlist: str = typer.Option(
+        ..., "--playlist", "-p", help="Name of the target Apple Music playlist"
+    ),
+    artist: Optional[str] = typer.Option(
+        None,
+        "--artist",
+        help="Remove all songs by this artist instead of pruning duplicates",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Simulate execution without modifying the playlist",
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Enable debug logging output"
+    ),
+):
+    """
+    Prune duplicate track versions, or remove all tracks by a specific artist from a playlist.
+    """
+    log_level = "DEBUG" if verbose else "INFO"
+    setup_logger(level=log_level)
+    try:
+        validate_platform()
+    except PlatformNotSupportedError as e:
+        logger.error(str(e))
+        raise typer.Exit(code=1)
+
+    try:
+        engine = AppleMusicIPCEngine(playlist)
+    except Exception as e:
+        logger.error(f"Failed to initialize Apple Music connection: {e}")
+        raise typer.Exit(code=1)
+
+    try:
+        # Check if we are removing a specific artist or pruning duplicates
+        if artist:
+            logger.info(f"Scanning playlist '{playlist}' for tracks by '{artist}'...")
+            tracks = engine.get_playlist_tracks()
+            if not tracks:
+                typer.echo(f"Playlist '{playlist}' is empty or does not exist.")
+                return
+
+            target_lower = artist.lower().strip()
+            to_remove = []
+            for track in tracks:
+                track_artist = track.get("artist", "").lower().strip()
+                if target_lower in track_artist or track_artist in target_lower:
+                    to_remove.append(track)
+
+            if not to_remove:
+                typer.echo(
+                    f"No tracks by artist '{artist}' found in playlist '{playlist}'."
+                )
+                return
+
+            typer.echo(f"Found {len(to_remove)} tracks by '{artist}' to remove:")
+            for track in to_remove:
+                typer.echo(f"  - '{track.get('name')}' (Album: {track.get('album')})")
+
+            if dry_run:
+                typer.echo("[DRY-RUN] Simulating deletion. No tracks were removed.")
+                return
+
+            track_ids = [
+                track["id"]
+                for track in to_remove
+                if "id" in track and track["id"] is not None
+            ]
+            typer.echo(f"Removing {len(track_ids)} tracks from playlist...")
+            deleted_count = engine.delete_tracks_by_id(track_ids)
+            typer.echo(
+                f"Successfully removed {deleted_count} tracks from playlist '{playlist}'."
+            )
+        else:
+            logger.info(f"Scanning playlist '{playlist}' for duplicate tracks...")
+            tracks = engine.get_playlist_tracks()
+            if not tracks:
+                typer.echo(f"Playlist '{playlist}' is empty or does not exist.")
+                return
+
+            from moshpit.dedup import identify_duplicates
+
+            duplicates = identify_duplicates(tracks)
+
+            if not duplicates:
+                typer.echo(
+                    f"No duplicate tracks/versions found in playlist '{playlist}'."
+                )
+                return
+
+            typer.echo(
+                f"Found {len(duplicates)} duplicate/alternative track versions to remove:"
+            )
+            for dup in duplicates:
+                typer.echo(
+                    f"  - '{dup.get('name')}' by {dup.get('artist')} (Album: {dup.get('album')})"
+                )
+
+            if dry_run:
+                typer.echo("[DRY-RUN] Simulating deletion. No tracks were removed.")
+                return
+
+            track_ids = [
+                dup["id"] for dup in duplicates if "id" in dup and dup["id"] is not None
+            ]
+            typer.echo(f"Removing {len(track_ids)} tracks from playlist...")
+            deleted_count = engine.delete_tracks_by_id(track_ids)
+            typer.echo(
+                f"Successfully removed {deleted_count} tracks from playlist '{playlist}'."
+            )
+    except Exception as e:
+        logger.error(f"Failed to prune playlist: {e}")
+        raise typer.Exit(code=1)
+    finally:
+        if hasattr(engine, "close"):
+            engine.close()
 
 
 if __name__ == "__main__":

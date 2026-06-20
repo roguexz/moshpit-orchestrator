@@ -18,9 +18,15 @@ def resolver():
 
 class TestTrackSuggestion:
     def test_to_dict(self):
-        track = TrackSuggestion(title="Enter Sandman", artist="Metallica", source="itunes_api")
+        track = TrackSuggestion(
+            title="Enter Sandman", artist="Metallica", source="itunes_api"
+        )
         d = track.to_dict()
-        assert d == {"title": "Enter Sandman", "artist": "Metallica", "source": "itunes_api"}
+        assert d == {
+            "title": "Enter Sandman",
+            "artist": "Metallica",
+            "source": "itunes_api",
+        }
 
     def test_dataclass_fields(self):
         track = TrackSuggestion(title="One", artist="Metallica", source="llm")
@@ -34,9 +40,21 @@ class TestiTunesSearchAPI:
         mock_response = {
             "resultCount": 3,
             "results": [
-                {"trackName": "Enter Sandman", "artistName": "Metallica", "wrapperType": "track"},
-                {"trackName": "Master of Puppets", "artistName": "Metallica", "wrapperType": "track"},
-                {"trackName": "Nothing Else Matters", "artistName": "Metallica", "wrapperType": "track"},
+                {
+                    "trackName": "Enter Sandman",
+                    "artistName": "Metallica",
+                    "wrapperType": "track",
+                },
+                {
+                    "trackName": "Master of Puppets",
+                    "artistName": "Metallica",
+                    "wrapperType": "track",
+                },
+                {
+                    "trackName": "Nothing Else Matters",
+                    "artistName": "Metallica",
+                    "wrapperType": "track",
+                },
             ],
         }
         with mock.patch("requests.get") as mock_get:
@@ -53,9 +71,21 @@ class TestiTunesSearchAPI:
         mock_response = {
             "resultCount": 3,
             "results": [
-                {"trackName": "Enter Sandman", "artistName": "Metallica", "wrapperType": "track"},
-                {"trackName": "Random Song", "artistName": "Some Other Band", "wrapperType": "track"},
-                {"trackName": "Nothing Else Matters", "artistName": "Metallica", "wrapperType": "track"},
+                {
+                    "trackName": "Enter Sandman",
+                    "artistName": "Metallica",
+                    "wrapperType": "track",
+                },
+                {
+                    "trackName": "Random Song",
+                    "artistName": "Some Other Band",
+                    "wrapperType": "track",
+                },
+                {
+                    "trackName": "Nothing Else Matters",
+                    "artistName": "Metallica",
+                    "wrapperType": "track",
+                },
             ],
         }
         with mock.patch("requests.get") as mock_get:
@@ -70,9 +100,21 @@ class TestiTunesSearchAPI:
         mock_response = {
             "resultCount": 3,
             "results": [
-                {"trackName": "Enter Sandman", "artistName": "Metallica", "wrapperType": "track"},
-                {"trackName": "enter sandman", "artistName": "Metallica", "wrapperType": "track"},
-                {"trackName": "Enter Sandman", "artistName": "Metallica", "wrapperType": "track"},
+                {
+                    "trackName": "Enter Sandman",
+                    "artistName": "Metallica",
+                    "wrapperType": "track",
+                },
+                {
+                    "trackName": "enter sandman",
+                    "artistName": "Metallica",
+                    "wrapperType": "track",
+                },
+                {
+                    "trackName": "Enter Sandman",
+                    "artistName": "Metallica",
+                    "wrapperType": "track",
+                },
             ],
         }
         with mock.patch("requests.get") as mock_get:
@@ -99,7 +141,11 @@ class TestiTunesSearchAPI:
             "resultCount": 2,
             "results": [
                 {"trackName": "", "artistName": "Metallica", "wrapperType": "track"},
-                {"trackName": "Enter Sandman", "artistName": "Metallica", "wrapperType": "track"},
+                {
+                    "trackName": "Enter Sandman",
+                    "artistName": "Metallica",
+                    "wrapperType": "track",
+                },
             ],
         }
         with mock.patch("requests.get") as mock_get:
@@ -119,8 +165,16 @@ class TestiTunesLookupAPI:
                 "resultCount": 3,
                 "results": [
                     {"wrapperType": "artist", "artistName": "Metallica"},
-                    {"wrapperType": "track", "trackName": "Fuel", "artistName": "Metallica"},
-                    {"wrapperType": "track", "trackName": "The Memory Remains", "artistName": "Metallica"},
+                    {
+                        "wrapperType": "track",
+                        "trackName": "Fuel",
+                        "artistName": "Metallica",
+                    },
+                    {
+                        "wrapperType": "track",
+                        "trackName": "The Memory Remains",
+                        "artistName": "Metallica",
+                    },
                 ],
             }
             with mock.patch("requests.get") as mock_get:
@@ -246,7 +300,9 @@ class TestArtistMatch:
 class TestMergeTracks:
     def test_merges_without_duplicates(self):
         primary = [
-            TrackSuggestion(title="Enter Sandman", artist="Metallica", source="itunes_api"),
+            TrackSuggestion(
+                title="Enter Sandman", artist="Metallica", source="itunes_api"
+            ),
         ]
         secondary = [
             TrackSuggestion(title="Enter Sandman", artist="Metallica", source="llm"),
@@ -274,19 +330,31 @@ class TestResolveOrchestration:
     def test_full_tiered_fallback(self, resolver):
         """When tier 1 returns fewer tracks than needed, tier 2 and 3 are tried."""
         with mock.patch.object(
-            resolver, "_resolve_itunes_search", return_value=[
-                TrackSuggestion(title="Song1", artist="TestArtist", source="itunes_api"),
-            ]
+            resolver,
+            "_resolve_itunes_search",
+            return_value=[
+                TrackSuggestion(
+                    title="Song1", artist="TestArtist", source="itunes_api"
+                ),
+            ],
         ):
             with mock.patch.object(
-                resolver, "_resolve_itunes_lookup", return_value=[
-                    TrackSuggestion(title="Song2", artist="TestArtist", source="itunes_lookup"),
-                ]
+                resolver,
+                "_resolve_itunes_lookup",
+                return_value=[
+                    TrackSuggestion(
+                        title="Song2", artist="TestArtist", source="itunes_lookup"
+                    ),
+                ],
             ):
                 with mock.patch.object(
-                    resolver, "_resolve_llm", return_value=[
-                        TrackSuggestion(title="Song3", artist="TestArtist", source="llm"),
-                    ]
+                    resolver,
+                    "_resolve_llm",
+                    return_value=[
+                        TrackSuggestion(
+                            title="Song3", artist="TestArtist", source="llm"
+                        ),
+                    ],
                 ):
                     tracks = resolver.resolve("TestArtist", 3)
                     assert len(tracks) == 3
@@ -298,10 +366,14 @@ class TestResolveOrchestration:
     def test_tier1_sufficient(self, resolver):
         """When tier 1 returns enough tracks, tiers 2 and 3 are not called."""
         with mock.patch.object(
-            resolver, "_resolve_itunes_search", return_value=[
-                TrackSuggestion(title=f"Song{i}", artist="TestArtist", source="itunes_api")
+            resolver,
+            "_resolve_itunes_search",
+            return_value=[
+                TrackSuggestion(
+                    title=f"Song{i}", artist="TestArtist", source="itunes_api"
+                )
                 for i in range(5)
-            ]
+            ],
         ):
             with mock.patch.object(resolver, "_resolve_itunes_lookup") as mock_lookup:
                 with mock.patch.object(resolver, "_resolve_llm") as mock_llm:

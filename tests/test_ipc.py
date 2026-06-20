@@ -268,3 +268,28 @@ def test_write_failure_manifest_io_error(mock_engine_init):
     with mock.patch("builtins.open", side_effect=IOError("Write permission denied")):
         filepath = engine.write_failure_manifest([], total_submitted=0)
         assert filepath == ""
+
+
+def test_get_playlist_tracks_success(mock_engine_init):
+    engine = AppleMusicIPCEngine("Test Playlist")
+    mock_jxa_response = '{"status": "success", "tracks": [{"id": 1001, "databaseID": 123, "name": "Time", "artist": "Pink Floyd", "album": "Dark Side"}]}'
+    with mock.patch.object(
+        AppleMusicIPCEngine, "_run_jxa", return_value=mock_jxa_response
+    ) as mock_jxa:
+        tracks = engine.get_playlist_tracks()
+        assert len(tracks) == 1
+        assert tracks[0]["id"] == 1001
+        assert tracks[0]["databaseID"] == 123
+        assert tracks[0]["name"] == "Time"
+        mock_jxa.assert_called_once()
+
+
+def test_delete_tracks_by_id_success(mock_engine_init):
+    engine = AppleMusicIPCEngine("Test Playlist")
+    mock_jxa_response = '{"status": "success", "count": 2}'
+    with mock.patch.object(
+        AppleMusicIPCEngine, "_run_jxa", return_value=mock_jxa_response
+    ) as mock_jxa:
+        count = engine.delete_tracks_by_id([1001, 1002])
+        assert count == 2
+        mock_jxa.assert_called_once()

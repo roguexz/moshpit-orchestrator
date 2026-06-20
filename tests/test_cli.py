@@ -69,10 +69,14 @@ def test_settings_fallback_env_override():
 
 @pytest.fixture
 def mock_ipc_engine():
-    # Mock AppleMusicWebEngine instantiation and methods
-    with mock.patch("moshpit.cli.AppleMusicWebEngine") as mock_class:
+    # Mock both AppleMusicWebEngine and AppleMusicIPCEngine instantiation and methods
+    with (
+        mock.patch("moshpit.cli.AppleMusicWebEngine") as mock_web_class,
+        mock.patch("moshpit.cli.AppleMusicIPCEngine") as mock_ipc_class,
+    ):
         mock_instance = mock.Mock()
-        mock_class.return_value = mock_instance
+        mock_web_class.return_value = mock_instance
+        mock_ipc_class.return_value = mock_instance
         # Default success response for resolved tracks
         mock_instance.append_resolved_tracks.return_value = {
             "status": "success",
@@ -244,13 +248,21 @@ def test_cli_run_sync_with_errors(mock_ipc_engine, mock_resolver, tmp_path):
 
     # Mock engine responses: success, all-failed, exception
     mock_ipc_engine.append_resolved_tracks.side_effect = [
-        {"status": "success", "added": 1, "skipped": 0, "failed": 0, "failed_tracks": []},
+        {
+            "status": "success",
+            "added": 1,
+            "skipped": 0,
+            "failed": 0,
+            "failed_tracks": [],
+        },
         {
             "status": "not_found",
             "added": 0,
             "skipped": 0,
             "failed": 1,
-            "failed_tracks": [{"title": "Song1", "artist": "GlitchArtist", "reason": "No matches"}],
+            "failed_tracks": [
+                {"title": "Song1", "artist": "GlitchArtist", "reason": "No matches"}
+            ],
         },
         Exception("JXA syntax error"),
     ]
@@ -277,7 +289,9 @@ def test_cli_run_sync_unexpected_exception(mock_ipc_engine, mock_resolver, tmp_p
     text_file = tmp_path / "list.txt"
     text_file.write_text("Tool")
 
-    mock_ipc_engine.append_resolved_tracks.side_effect = Exception("Unexpected OS Error")
+    mock_ipc_engine.append_resolved_tracks.side_effect = Exception(
+        "Unexpected OS Error"
+    )
 
     with mock.patch("sys.platform", "darwin"):
         with mock.patch("time.sleep", return_value=None):
@@ -307,7 +321,9 @@ def test_cli_run_input_failure():
             assert result.exit_code == 1
 
 
-def test_cli_run_sync_with_manifest_write_failure(mock_ipc_engine, mock_resolver, tmp_path):
+def test_cli_run_sync_with_manifest_write_failure(
+    mock_ipc_engine, mock_resolver, tmp_path
+):
     text_file = tmp_path / "list.txt"
     text_file.write_text("Tool\nFailedArtist")
 
@@ -317,13 +333,21 @@ def test_cli_run_sync_with_manifest_write_failure(mock_ipc_engine, mock_resolver
     ]
 
     mock_ipc_engine.append_resolved_tracks.side_effect = [
-        {"status": "success", "added": 1, "skipped": 0, "failed": 0, "failed_tracks": []},
+        {
+            "status": "success",
+            "added": 1,
+            "skipped": 0,
+            "failed": 0,
+            "failed_tracks": [],
+        },
         {
             "status": "not_found",
             "added": 0,
             "skipped": 0,
             "failed": 1,
-            "failed_tracks": [{"title": "Song1", "artist": "FailedArtist", "reason": "No matches"}],
+            "failed_tracks": [
+                {"title": "Song1", "artist": "FailedArtist", "reason": "No matches"}
+            ],
         },
     ]
     mock_ipc_engine.write_failure_manifest.return_value = (
@@ -337,7 +361,9 @@ def test_cli_run_sync_with_manifest_write_failure(mock_ipc_engine, mock_resolver
             mock_ipc_engine.write_failure_manifest.assert_called_once()
 
 
-def test_cli_run_sync_remove_previous_manifest(mock_ipc_engine, mock_resolver, tmp_path):
+def test_cli_run_sync_remove_previous_manifest(
+    mock_ipc_engine, mock_resolver, tmp_path
+):
     # Setup test file
     text_file = tmp_path / "list.txt"
     text_file.write_text("Tool")
@@ -369,6 +395,17 @@ def test_cli_run_print_artists(tmp_path):
         result = runner.invoke(app, ["run", str(text_file), "--print-artists"])
         assert result.exit_code == 0
         assert "Tool\nDeftones\n" in result.output
+
+
+def test_cli_run_duplicate_artists_deduplicated(tmp_path):
+    text_file = tmp_path / "list.txt"
+    text_file.write_text("Tool\nDeftones\nTool\n")
+
+    with mock.patch("sys.platform", "linux"):
+        result = runner.invoke(app, ["run", str(text_file), "--print-artists"])
+        assert result.exit_code == 0
+        # Should print each unique artist exactly once at the end of output
+        assert result.output.endswith("Tool\nDeftones\n")
 
 
 def test_cli_run_resolver_returns_empty(mock_ipc_engine, mock_resolver, tmp_path):
@@ -407,3 +444,144 @@ def test_cli_run_idempotent_skip(mock_ipc_engine, mock_resolver, tmp_path):
             assert result.exit_code == 0
             # No failure manifest should be written for idempotent runs
             mock_ipc_engine.write_failure_manifest.assert_not_called()
+
+
+def test_cli_analyze_summary(mock_ipc_engine):
+    mock_ipc_engine.get_playlist_tracks.return_value = [
+        {
+            "id": 1001,
+            "databaseID": 1,
+            "name": "Time",
+            "artist": "Pink Floyd",
+            "album": "Dark Side",
+        },
+        {
+            "id": 1002,
+            "databaseID": 2,
+            "name": "Time (Live)",
+            "artist": "Pink Floyd",
+            "album": "Live",
+        },
+        {
+            "id": 1003,
+            "databaseID": 3,
+            "name": "Sober",
+            "artist": "Tool",
+            "album": "Undertow",
+        },
+    ]
+    with mock.patch("sys.platform", "darwin"):
+        result = runner.invoke(app, ["analyze", "-p", "Test Playlist"])
+        assert result.exit_code == 0
+        assert "Playlist 'Test Playlist' analysis summary:" in result.stdout
+        assert "Total tracks: 3" in result.stdout
+        assert "Unique artists: 2" in result.stdout
+        assert "Duplicate track versions found: 1" in result.stdout
+
+
+def test_cli_analyze_list_artists(mock_ipc_engine):
+    mock_ipc_engine.get_playlist_tracks.return_value = [
+        {
+            "id": 1001,
+            "databaseID": 1,
+            "name": "Time",
+            "artist": "Pink Floyd",
+            "album": "Dark Side",
+        },
+        {
+            "id": 1002,
+            "databaseID": 2,
+            "name": "Sober",
+            "artist": "Tool",
+            "album": "Undertow",
+        },
+    ]
+    with mock.patch("sys.platform", "darwin"):
+        result = runner.invoke(
+            app, ["analyze", "-p", "Test Playlist", "--list-artists"]
+        )
+        assert result.exit_code == 0
+        assert "Unique artists in playlist 'Test Playlist':" in result.stdout
+        assert "Pink Floyd" in result.stdout
+        assert "Tool" in result.stdout
+
+
+def test_cli_analyze_list_duplicates(mock_ipc_engine):
+    mock_ipc_engine.get_playlist_tracks.return_value = [
+        {
+            "id": 1001,
+            "databaseID": 1,
+            "name": "Comfortably Numb",
+            "artist": "Pink Floyd",
+            "album": "Wall",
+        },
+        {
+            "id": 1002,
+            "databaseID": 2,
+            "name": "Comfortably Numb (Live)",
+            "artist": "Pink Floyd",
+            "album": "Live",
+        },
+    ]
+    with mock.patch("sys.platform", "darwin"):
+        result = runner.invoke(
+            app, ["analyze", "-p", "Test Playlist", "--list-duplicates"]
+        )
+        assert result.exit_code == 0
+        assert (
+            "Duplicate/alternative track versions found in playlist 'Test Playlist':"
+            in result.stdout
+        )
+        assert "Comfortably Numb (Live)" in result.stdout
+
+
+def test_cli_prune_duplicates(mock_ipc_engine):
+    mock_ipc_engine.get_playlist_tracks.return_value = [
+        {
+            "id": 1001,
+            "databaseID": 1,
+            "name": "Comfortably Numb",
+            "artist": "Pink Floyd",
+            "album": "Wall",
+        },
+        {
+            "id": 1002,
+            "databaseID": 2,
+            "name": "Comfortably Numb (Live)",
+            "artist": "Pink Floyd",
+            "album": "Live",
+        },
+    ]
+    mock_ipc_engine.delete_tracks_by_id.return_value = 1
+    with mock.patch("sys.platform", "darwin"):
+        result = runner.invoke(app, ["prune", "-p", "Test Playlist"])
+        assert result.exit_code == 0
+        assert "Successfully removed 1 tracks" in result.stdout
+        mock_ipc_engine.delete_tracks_by_id.assert_called_once_with([1002])
+
+
+def test_cli_prune_artist(mock_ipc_engine):
+    mock_ipc_engine.get_playlist_tracks.return_value = [
+        {
+            "id": 1001,
+            "databaseID": 1,
+            "name": "Time",
+            "artist": "Pink Floyd",
+            "album": "Dark Side",
+        },
+        {
+            "id": 1002,
+            "databaseID": 2,
+            "name": "Sober",
+            "artist": "Tool",
+            "album": "Undertow",
+        },
+    ]
+    mock_ipc_engine.delete_tracks_by_id.return_value = 1
+    with mock.patch("sys.platform", "darwin"):
+        result = runner.invoke(
+            app, ["prune", "-p", "Test Playlist", "--artist", "Pink Floyd"]
+        )
+        assert result.exit_code == 0
+        assert "Successfully removed 1 tracks" in result.stdout
+        mock_ipc_engine.delete_tracks_by_id.assert_called_once_with([1001])

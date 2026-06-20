@@ -41,7 +41,7 @@ class TopTracksResolver:
         "Chrome/120.0.0.0 Safari/537.36"
     )
 
-    def __init__(self, config=settings, storefront: str = None):
+    def __init__(self, config=settings, storefront: Optional[str] = None):
         self.config = config
         self._delay = config.resolver_delay
         self._storefront = storefront if storefront else config.storefront
@@ -72,9 +72,7 @@ class TopTracksResolver:
 
         return tracks[:count]
 
-    def _resolve_itunes_search(
-        self, artist: str, count: int
-    ) -> List[TrackSuggestion]:
+    def _resolve_itunes_search(self, artist: str, count: int) -> List[TrackSuggestion]:
         """Tier 1: Query the iTunes Search API for songs matching the artist name."""
         try:
             params = {
@@ -133,9 +131,7 @@ class TopTracksResolver:
             logger.debug(f"iTunes Search API resolution failed for '{artist}': {e}")
             return []
 
-    def _resolve_itunes_lookup(
-        self, artist: str, count: int
-    ) -> List[TrackSuggestion]:
+    def _resolve_itunes_lookup(self, artist: str, count: int) -> List[TrackSuggestion]:
         """Tier 2: Find artist ID via search, then use the lookup API for additional songs.
 
         The lookup API can surface different songs than the search API,
@@ -239,9 +235,7 @@ class TopTracksResolver:
         except Exception:
             return None
 
-    def _resolve_llm(
-        self, artist: str, count: int
-    ) -> List[TrackSuggestion]:
+    def _resolve_llm(self, artist: str, count: int) -> List[TrackSuggestion]:
         """Tier 3: Fall back to the local LLM for top track suggestions."""
         try:
             from moshpit.ingest.base import BaseIngester
@@ -272,9 +266,7 @@ class TopTracksResolver:
                             source="llm",
                         )
                     )
-            logger.debug(
-                f"LLM resolved {len(tracks)} tracks for '{artist}'"
-            )
+            logger.debug(f"LLM resolved {len(tracks)} tracks for '{artist}'")
             return tracks
 
         except Exception as e:

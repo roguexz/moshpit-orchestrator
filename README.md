@@ -1,10 +1,25 @@
-# Moshpit Orchestrator
+# Moshpit Mauler
 
-Moshpit Orchestrator is a local, privacy-first Apple Music playlist generator. It processes multi-modal assets — such as
-event webpage URLs, concert posters, or plain text files—using local OpenAI-compatible LLMs (such as Ollama, oMLX, LM
-Studio, or vLLM) to extract artist lineups. It resolves top tracks via fallback APIs (iTunes, Last.fm, MusicBrainz) and
-automates the Apple Music web player via Playwright (leveraging local macOS JXA for caching) to compile tracks into a
-playlist.
+![Moshpit Mauler](docs/moshpit-mauler.png)
+
+Ever stared at a massive festival poster with fifty tiny artist names and wished you could instantly hear them all? *
+*Moshpit Mauler** is here to help: it takes a massive festival flyer and absolutely shreds it into a perfectly organized
+**Apple Music** playlist, saving you from the manual search-and-add grind.
+
+Behind the scenes, this tiny little program does some _heavy_ lifting:
+
+- **Spins up the Playlist**: Automatically checks your library and creates the target playlist if it doesn't already
+  exist (powered by local macOS JXA).
+- **Extracts the Lineup**: Extracts artist names from whatever source you feed it—whether that's parsing a poster flyer
+  using a local vision-LLM, scraping a festival schedule URL, or just reading a simple text file.
+- **Resolves the Top Tracks**: Gathers the top tracks (defaulting to 20) for each artist, leveraging iTunes APIs and
+  local LLM fallback chains, while intelligently filtering out duplicates.
+- **Automates the Injection**: Uses Playwright and Chromium to automate the Apple Music web player, searching for the
+  resolved tracks and adding them directly to the target playlist (requiring just a one-time manual login).
+
+Now you can share that playlist with your best friends so you can all rock out together!
+
+Built by a metalhead who enjoys listening to music all the time. 🤘
 
 ## Prerequisites
 
@@ -33,7 +48,7 @@ We standardize on `uv` for package and environment management.
 
 ## Configuration
 
-Configure the orchestrator using environment variables (with fallback defaults). You can define these in your shell
+Configure the application using environment variables (with fallback defaults). You can define these in your shell
 profile or prefix your commands:
 
 | Variable                            | Description                                         | Default                  |
@@ -95,7 +110,7 @@ Both runners expose standard OpenAI compatibility.
 
 ## Usage
 
-Moshpit Orchestrator provides a CLI tool via `uv run moshpit` with the following commands:
+Moshpit Mauler provides a CLI tool via `uv run moshpit` with the following commands:
 
 - [`run`](#1-run-command): Ingest source assets and generate an Apple Music playlist.
 - [`analyze`](#2-analyze-command): Inspect playlist statistics, unique artists, and track duplicate versions.
@@ -114,6 +129,11 @@ Fetches an event schedule URL, strips nav/footers/styling, clean-formats body te
 ```bash
 uv run moshpit run "https://aftershockfestival.com/lineup" --playlist "Aftershock 2026"
 ```
+
+> [!NOTE]
+> Check out
+> this [Aftershock 2026 Apple Music Playlist](https://music.apple.com/in/playlist/aftershock-2026/pl.u-d2b0kEBtMkDXzv)
+> for an example of a playlist compiled using this method.
 
 #### Vision Lineup Ingestion
 

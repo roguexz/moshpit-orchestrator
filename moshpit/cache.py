@@ -21,10 +21,10 @@ class MoshpitCache:
             home = os.path.expanduser("~")
             if sys.platform == "darwin":
                 cache_dir = os.path.join(
-                    home, "Library", "Caches", "moshpit-orchestrator"
+                    home, "Library", "Caches", "moshpit-mauler"
                 )
             else:
-                cache_dir = os.path.join(home, ".cache", "moshpit-orchestrator")
+                cache_dir = os.path.join(home, ".cache", "moshpit-mauler")
 
             # Ensure the directory exists
             os.makedirs(cache_dir, exist_ok=True)

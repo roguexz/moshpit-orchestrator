@@ -46,9 +46,9 @@ class AppleMusicWebEngine:
 
         home = os.path.expanduser("~")
         if sys.platform == "darwin":
-            cache_dir = os.path.join(home, "Library", "Caches", "moshpit-orchestrator")
+            cache_dir = os.path.join(home, "Library", "Caches", "moshpit-mauler")
         else:
-            cache_dir = os.path.join(home, ".cache", "moshpit-orchestrator")
+            cache_dir = os.path.join(home, ".cache", "moshpit-mauler")
 
         user_data_dir = os.path.join(cache_dir, "playwright_profile")
         os.makedirs(user_data_dir, exist_ok=True)

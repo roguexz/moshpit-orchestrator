@@ -1,1 +1,1 @@
-# Moshpit Orchestrator test suite
+# Moshpit Mauler test suite

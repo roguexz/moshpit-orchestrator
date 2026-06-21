@@ -15,13 +15,13 @@ from moshpit.ipc import AppleMusicWebEngine, AppleMusicIPCEngine
 from moshpit.cache import MoshpitCache
 from datetime import datetime, timezone
 
-app = typer.Typer(help="Moshpit Orchestrator: Apple Music Playlist Generator")
+app = typer.Typer(help="Moshpit Mauler: Apple Music Playlist Generator")
 
 
 @app.callback()
 def main():
     """
-    Moshpit Orchestrator: Local VLM & IPC Automation Engine.
+    Moshpit Mauler: Local VLM & IPC Automation Engine.
     """
     pass
 
@@ -30,7 +30,7 @@ def validate_platform():
     """Verifies that the script is running on macOS."""
     if sys.platform != "darwin":
         raise PlatformNotSupportedError(
-            "Moshpit Orchestrator requires macOS (darwin) to automate Music.app."
+            "Moshpit Mauler requires macOS (darwin) to automate Music.app."
         )
 
 
@@ -144,7 +144,7 @@ def run(
     log_level = "DEBUG" if verbose else "INFO"
     setup_logger(level=log_level)
 
-    logger.info("Initializing Moshpit Orchestrator runtime environment...")
+    logger.info("Initializing Moshpit Mauler runtime environment...")
 
     # 2. Validate platform and input
     if not print_artists:

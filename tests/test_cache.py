@@ -26,13 +26,13 @@ def test_cache_os_specific_path(monkeypatch):
     # Mock OS platform to darwin and verify caches path
     monkeypatch.setattr(sys, "platform", "darwin")
     cache = MoshpitCache()
-    expected_darwin_dir = os.path.expanduser("~/Library/Caches/moshpit-orchestrator")
+    expected_darwin_dir = os.path.expanduser("~/Library/Caches/moshpit-mauler")
     assert cache.db_path.startswith(expected_darwin_dir)
 
     # Mock OS platform to linux and verify caches path
     monkeypatch.setattr(sys, "platform", "linux")
     cache2 = MoshpitCache()
-    expected_linux_dir = os.path.expanduser("~/.cache/moshpit-orchestrator")
+    expected_linux_dir = os.path.expanduser("~/.cache/moshpit-mauler")
     assert cache2.db_path.startswith(expected_linux_dir)
 
 

@@ -1,5 +1,5 @@
 [project]
-name = "moshpit-orchestrator"
+name = "moshpit-mauler"
 version = "0.1.0"
 description = "Local LLM-Driven Apple Music Playlist Generator"
 readme = "README.md"

@@ -1,5 +1,5 @@
 class MoshpitException(Exception):
-    """Base exception for all Moshpit Orchestrator operations."""
+    """Base exception for all Moshpit Mauler operations."""
 
     pass
 

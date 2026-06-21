@@ -293,3 +293,52 @@ def test_delete_tracks_by_id_success(mock_engine_init):
         count = engine.delete_tracks_by_id([1001, 1002])
         assert count == 2
         mock_jxa.assert_called_once()
+
+
+def test_sync_from_playlist_success(mock_engine_init):
+    engine = AppleMusicIPCEngine("Destination Playlist")
+    mock_jxa_response = '{"status": "success", "dry_run": false, "before_count": 2, "after_count": 3, "before_tracks": [], "after_tracks": []}'
+    with mock.patch.object(
+        AppleMusicIPCEngine, "_run_jxa", return_value=mock_jxa_response
+    ) as mock_jxa:
+        res = engine.sync_from_playlist("Source Playlist", dry_run=False)
+        assert res["status"] == "success"
+        assert res["dry_run"] is False
+        assert res["before_count"] == 2
+        assert res["after_count"] == 3
+        mock_jxa.assert_called_once()
+
+
+def test_sync_from_playlist_dry_run(mock_engine_init):
+    engine = AppleMusicIPCEngine("Destination Playlist")
+    mock_jxa_response = '{"status": "success", "dry_run": true, "before_count": 2, "after_count": 3, "before_tracks": [], "after_tracks": []}'
+    with mock.patch.object(
+        AppleMusicIPCEngine, "_run_jxa", return_value=mock_jxa_response
+    ) as mock_jxa:
+        res = engine.sync_from_playlist("Source Playlist", dry_run=True)
+        assert res["status"] == "success"
+        assert res["dry_run"] is True
+        assert res["before_count"] == 2
+        assert res["after_count"] == 3
+        mock_jxa.assert_called_once()
+
+
+def test_sync_from_playlist_error(mock_engine_init):
+    engine = AppleMusicIPCEngine("Destination Playlist")
+    mock_jxa_response = '{"status": "error", "message": "Source playlist not found."}'
+    with mock.patch.object(
+        AppleMusicIPCEngine, "_run_jxa", return_value=mock_jxa_response
+    ):
+        with pytest.raises(MusicAppException, match="Failed to synchronize playlists"):
+            engine.sync_from_playlist("Source Playlist")
+
+
+def test_sync_from_playlist_invalid_json(mock_engine_init):
+    engine = AppleMusicIPCEngine("Destination Playlist")
+    with mock.patch.object(
+        AppleMusicIPCEngine, "_run_jxa", return_value="invalid-json"
+    ):
+        with pytest.raises(
+            MusicAppException, match="Invalid JSON returned from JXA sync"
+        ):
+            engine.sync_from_playlist("Source Playlist")

@@ -13,7 +13,6 @@ from moshpit.dedup import normalize_track_title, get_track_preference_score
 from moshpit.ingest.normalizer import extract_json_block
 
 
-
 @dataclass
 class TrackSuggestion:
     """A resolved track suggestion from one of the discovery sources."""
@@ -80,14 +79,15 @@ class TopTracksResolver:
 
         return tracks[:count]
 
-
     def _resolve_itunes_search(self, artist: str, count: int) -> List[TrackSuggestion]:
         """Tier 1: Query the iTunes Search API for songs matching the artist name."""
         try:
             params = {
                 "term": artist,
                 "entity": "song",
-                "limit": str(min(max(count * 3, 50), 200)),  # overfetch to allow version deduplication
+                "limit": str(
+                    min(max(count * 3, 50), 200)
+                ),  # overfetch to allow version deduplication
                 "country": self._storefront,
             }
             resp = requests.get(
@@ -157,7 +157,9 @@ class TopTracksResolver:
             params = {
                 "id": str(artist_id),
                 "entity": "song",
-                "limit": str(min(max(count * 3, 50), 200)),  # overfetch to allow version deduplication
+                "limit": str(
+                    min(max(count * 3, 50), 200)
+                ),  # overfetch to allow version deduplication
                 "country": self._storefront,
             }
             resp = requests.get(
@@ -294,8 +296,7 @@ class TopTracksResolver:
         n = re.sub(r"\s*\([^)]*\)", "", n)
         n = re.sub(r"\s*\[[^\]]*\]", "", n)
         n = "".join(
-            c for c in unicodedata.normalize("NFKD", n)
-            if not unicodedata.combining(c)
+            c for c in unicodedata.normalize("NFKD", n) if not unicodedata.combining(c)
         )
         n = n.replace("&", "and")
         n = re.sub(r"[^a-z0-9\s]", "", n)
@@ -324,14 +325,15 @@ class TopTracksResolver:
         # Check for collaboration matches by splitting candidate
         # e.g., "Doobie & Krash Minati" -> ["Doobie", "Krash Minati"]
         separators = re.compile(
-            r"\s*(?:,|&|\b(?:and|feat\.?|featuring|with|vs\.?|x)\b)\s*",
-            re.IGNORECASE
+            r"\s*(?:,|&|\b(?:and|feat\.?|featuring|with|vs\.?|x)\b)\s*", re.IGNORECASE
         )
         parts = separators.split(candidate)
         if len(parts) > 1:
             for part in parts:
                 p_norm = TopTracksResolver._normalize_artist_name(part)
-                if q_norm == p_norm or q_norm.replace(" ", "") == p_norm.replace(" ", ""):
+                if q_norm == p_norm or q_norm.replace(" ", "") == p_norm.replace(
+                    " ", ""
+                ):
                     return True
 
         return False
@@ -354,12 +356,16 @@ class TopTracksResolver:
                 merged.append(track)
         return merged
 
-    def _deduplicate_suggestions(self, tracks: List[TrackSuggestion]) -> List[TrackSuggestion]:
+    def _deduplicate_suggestions(
+        self, tracks: List[TrackSuggestion]
+    ) -> List[TrackSuggestion]:
         """
         Deduplicates track suggestions by normalized title, picking the version
         with the highest preference score, and preserving original relative order.
         """
-        groups: dict[str, List[tuple[int, TrackSuggestion]]] = {}  # norm_title -> List[(index, track)]
+        groups: dict[str, List[tuple[int, TrackSuggestion]]] = (
+            {}
+        )  # norm_title -> List[(index, track)]
         for idx, track in enumerate(tracks):
             norm_title = normalize_track_title(track.title)
             if norm_title not in groups:
@@ -384,4 +390,3 @@ class TopTracksResolver:
         # Sort selected tracks by their original index to preserve overall order
         unique_tracks.sort(key=lambda item: item[0])
         return [track for _, track in unique_tracks]
-

@@ -20,9 +20,7 @@ class MoshpitCache:
             # Resolve OS-specific cache directory
             home = os.path.expanduser("~")
             if sys.platform == "darwin":
-                cache_dir = os.path.join(
-                    home, "Library", "Caches", "moshpit-mauler"
-                )
+                cache_dir = os.path.join(home, "Library", "Caches", "moshpit-mauler")
             else:
                 cache_dir = os.path.join(home, ".cache", "moshpit-mauler")
 

@@ -308,7 +308,9 @@ class TestArtistMatch:
         assert TopTracksResolver._artist_match("Doobie", "Krash Minati x Doobie")
 
     def test_normalization_variations(self):
-        assert TopTracksResolver._artist_match("Florence and the Machine", "Florence & The Machine")
+        assert TopTracksResolver._artist_match(
+            "Florence and the Machine", "Florence & The Machine"
+        )
         assert TopTracksResolver._artist_match("Florence", "Florence & The Machine")
         assert TopTracksResolver._artist_match("Jay-Z", "Jay Z")
         assert TopTracksResolver._artist_match("Beyoncé", "Beyonce")
@@ -413,8 +415,14 @@ class TestResolveOrchestration:
             resolver,
             "_resolve_itunes_search",
             return_value=[
-                TrackSuggestion(title="Comfortably Numb (Live)", artist="Pink Floyd", source="itunes_api"),
-                TrackSuggestion(title="Comfortably Numb", artist="Pink Floyd", source="itunes_api"),
+                TrackSuggestion(
+                    title="Comfortably Numb (Live)",
+                    artist="Pink Floyd",
+                    source="itunes_api",
+                ),
+                TrackSuggestion(
+                    title="Comfortably Numb", artist="Pink Floyd", source="itunes_api"
+                ),
                 TrackSuggestion(title="Time", artist="Pink Floyd", source="itunes_api"),
             ],
         ):
@@ -425,14 +433,21 @@ class TestResolveOrchestration:
                     assert [t.title for t in tracks] == ["Comfortably Numb", "Time"]
 
 
-
 class TestDeduplicateSuggestions:
     def test_deduplicate_suggestions_picks_better_version(self, resolver):
         tracks = [
-            TrackSuggestion(title="Comfortably Numb (Live)", artist="Pink Floyd", source="itunes_api"),
-            TrackSuggestion(title="Comfortably Numb", artist="Pink Floyd", source="itunes_api"),
+            TrackSuggestion(
+                title="Comfortably Numb (Live)",
+                artist="Pink Floyd",
+                source="itunes_api",
+            ),
+            TrackSuggestion(
+                title="Comfortably Numb", artist="Pink Floyd", source="itunes_api"
+            ),
             TrackSuggestion(title="Time", artist="Pink Floyd", source="itunes_api"),
-            TrackSuggestion(title="Time (Live at Pompeii)", artist="Pink Floyd", source="itunes_api"),
+            TrackSuggestion(
+                title="Time (Live at Pompeii)", artist="Pink Floyd", source="itunes_api"
+            ),
         ]
         dedupped = resolver._deduplicate_suggestions(tracks)
         # Should keep "Comfortably Numb" (index 1) and "Time" (index 2)
@@ -452,13 +467,16 @@ class TestDeduplicateSuggestions:
 class TestMergeTracksDeduplication:
     def test_merge_tracks_deduplicates_versions(self):
         primary = [
-            TrackSuggestion(title="Comfortably Numb", artist="Pink Floyd", source="itunes_api"),
+            TrackSuggestion(
+                title="Comfortably Numb", artist="Pink Floyd", source="itunes_api"
+            ),
         ]
         secondary = [
-            TrackSuggestion(title="Comfortably Numb (Live)", artist="Pink Floyd", source="llm"),
+            TrackSuggestion(
+                title="Comfortably Numb (Live)", artist="Pink Floyd", source="llm"
+            ),
             TrackSuggestion(title="Time", artist="Pink Floyd", source="llm"),
         ]
         merged = TopTracksResolver._merge_tracks(primary, secondary, 10)
         assert len(merged) == 2
         assert [t.title for t in merged] == ["Comfortably Numb", "Time"]
-

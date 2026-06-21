@@ -115,6 +115,7 @@ Moshpit Mauler provides a CLI tool via `uv run moshpit` with the following comma
 - [`run`](#1-run-command): Ingest source assets and generate an Apple Music playlist.
 - [`analyze`](#2-analyze-command): Inspect playlist statistics, unique artists, and track duplicate versions.
 - [`prune`](#3-prune-command): Remove duplicates or tracks from a specific artist.
+- [`sync`](#4-sync-command): Synchronize two playlists, mirroring tracks from source to destination.
 
 ---
 
@@ -219,6 +220,34 @@ uv run moshpit prune [OPTIONS]
 - Remove all tracks by a specific artist:
   ```bash
   uv run moshpit prune -p "Aftershock 2026" --artist "Metallica"
+  ```
+
+---
+
+### 4. Sync Command
+
+Synchronize one playlist (source) to another (destination), making the destination mirror the source exactly. This is
+extremely useful if you share a playlist with friends (via Apple Music share link) and want to update its contents using
+a fresh/scratch playlist without breaking the share link or changing the playlist ID.
+
+```bash
+uv run moshpit sync [OPTIONS]
+```
+
+- `-s, --source TEXT` (Required): Name of the source playlist to sync from.
+- `-d, --destination TEXT` (Required): Name of the destination playlist to sync to.
+- `--dry-run`: Simulate the sync process without modifying the destination playlist.
+- `-v, --verbose`: Enable debug logging output.
+
+#### Examples
+
+- Dry run simulation of sync:
+  ```bash
+  uv run moshpit sync -s "Festival Temp" -d "Public Festival Playlist" --dry-run
+  ```
+- Perform the actual sync (overwriting destination's tracks with source's tracks):
+  ```bash
+  uv run moshpit sync -s "Festival Temp" -d "Public Festival Playlist"
   ```
 
 ## Developer CLI

@@ -1,7 +1,6 @@
 import os
 import json
 import time
-import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -13,7 +12,7 @@ from playwright.sync_api import (
 )
 from moshpit.exceptions import JXAError, MusicAppException
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class AppleMusicWebEngine:
@@ -141,8 +140,12 @@ class AppleMusicWebEngine:
                 return JSON.stringify([]);
             }}
             var tracksSpec = playlist.tracks;
-            var names = tracksSpec.name();
-            var artists = tracksSpec.artist();
+            var names = [];
+            var artists = [];
+            try {{
+                names = tracksSpec.name();
+                artists = tracksSpec.artist();
+            }} catch(e) {{}}
             var out = [];
             for (var i = 0; i < names.length; i++) {{
                 try {{
@@ -255,17 +258,16 @@ class AppleMusicWebEngine:
         url = f"https://music.apple.com/{self.storefront}/search?term={quote(search_term)}"
         page.goto(url)
 
-        # Wait for either top search result or track list item
         try:
-            # We look for the first More button specifically on a TRACK (not an artist or album)
-            more_button = page.locator(
-                "[data-testid='track-lockup'] [data-testid='more-button']"
-            ).first
-            more_button.wait_for(state="visible", timeout=10000)
-
-            # Hovering usually ensures any dynamic lazy menus load
-            more_button.hover()
+            # First find the track row, wait for it to be visible, and hover over it to make the more-button visible
+            track_row = page.locator("[data-testid='track-lockup']").first
+            track_row.wait_for(state="visible", timeout=10000)
+            track_row.hover()
             page.wait_for_timeout(500)
+
+            # Now find the more-button inside the hovered track row
+            more_button = track_row.locator("[data-testid='more-button']").first
+            more_button.wait_for(state="visible", timeout=5000)
             more_button.click()
 
             # Now wait for the context menu item "Add to Playlist"
@@ -285,10 +287,36 @@ class AppleMusicWebEngine:
                 playlist_item.wait_for(state="visible", timeout=5000)
                 playlist_item.click()
             except TimeoutError:
-                return {
-                    "status": "not_found",
-                    "message": f"Playlist '{self.target_playlist}' not found in sub-menu.",
-                }
+                logger.info(
+                    f"Playlist '{self.target_playlist}' not found in web player menu. "
+                    "Creating it on the fly..."
+                )
+                try:
+                    # Click the "New Playlist" button
+                    new_playlist_btn = page.locator("text='New Playlist'").first
+                    new_playlist_btn.wait_for(state="visible", timeout=5000)
+                    new_playlist_btn.click()
+
+                    # Wait for the Playlist Title input to appear and type the name
+                    title_input = page.locator(
+                        "input[placeholder='Playlist Title']"
+                    ).first
+                    title_input.wait_for(state="visible", timeout=5000)
+                    title_input.fill(self.target_playlist)
+
+                    # Click the submit/Create button
+                    create_btn = page.locator("button:has-text('Create')").first
+                    create_btn.wait_for(state="visible", timeout=5000)
+                    create_btn.click()
+
+                    # Wait for the input to disappear to confirm creation/addition is done
+                    title_input.wait_for(state="hidden", timeout=10000)
+                except Exception as create_err:
+                    return {
+                        "status": "not_found",
+                        "message": f"Playlist '{self.target_playlist}' not found in sub-menu, "
+                        f"and failed to create on the fly: {create_err}",
+                    }
 
             # Wait a sec for the action to complete or for a popup to appear
             page.wait_for_timeout(1000)

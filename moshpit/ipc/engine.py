@@ -430,11 +430,18 @@ class AppleMusicIPCEngine:
             return JSON.stringify({{status: "error", message: "Playlist not found"}});
         }}
         var tracksSpec = targetPlaylist.tracks;
-        var ids = tracksSpec.id();
-        var dbIds = tracksSpec.databaseID();
-        var names = tracksSpec.name();
-        var artists = tracksSpec.artist();
-        var albums = tracksSpec.album();
+        var ids = [];
+        var dbIds = [];
+        var names = [];
+        var artists = [];
+        var albums = [];
+        try {{
+            ids = tracksSpec.id();
+            dbIds = tracksSpec.databaseID();
+            names = tracksSpec.name();
+            artists = tracksSpec.artist();
+            albums = tracksSpec.album();
+        }} catch (e) {{}}
         var out = [];
         for (var j = 0; j < ids.length; j++) {{
             out.push({{
@@ -510,4 +517,116 @@ class AppleMusicIPCEngine:
         except json.JSONDecodeError:
             raise MusicAppException(
                 f"Invalid JSON returned from JXA deletion: {response_raw}"
+            )
+
+    def sync_from_playlist(
+        self, source_playlist_name: str, dry_run: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Synchronizes this playlist (destination) to match the source playlist exactly.
+        If dry_run is True, simulates the sync.
+        """
+        escaped_source = self._escape_quote(source_playlist_name)
+        escaped_dest = self._escape_quote(self.playlist_name)
+        js_dry_run = "true" if dry_run else "false"
+
+        jxa_script = f"""
+        var playlists = Music.userPlaylists;
+        var sourcePlaylist = null;
+        var destPlaylist = null;
+        
+        for (var i = 0; i < playlists.length; i++) {{
+            if (playlists[i].name() === "{escaped_source}") {{
+                sourcePlaylist = playlists[i];
+            }}
+            if (playlists[i].name() === "{escaped_dest}") {{
+                destPlaylist = playlists[i];
+            }}
+        }}
+        
+        if (!sourcePlaylist) {{
+            return JSON.stringify({{status: "error", message: "Source playlist '{escaped_source}' not found."}});
+        }}
+        
+        if (!destPlaylist) {{
+            return JSON.stringify({{status: "error", message: "Destination playlist '{escaped_dest}' not found."}});
+        }}
+        
+        var sourceTracksSpec = sourcePlaylist.tracks;
+        var sourceNames = [];
+        var sourceArtists = [];
+        try {{
+            sourceNames = sourceTracksSpec.name();
+            sourceArtists = sourceTracksSpec.artist();
+        }} catch (e) {{}}
+        
+        var destTracksSpec = destPlaylist.tracks;
+        var destNames = [];
+        var destArtists = [];
+        try {{
+            destNames = destTracksSpec.name();
+            destArtists = destTracksSpec.artist();
+        }} catch (e) {{}}
+        
+        var beforeTracks = [];
+        for (var j = 0; j < destNames.length; j++) {{
+            beforeTracks.push({{name: destNames[j], artist: destArtists[j]}});
+        }}
+        
+        var newTracks = [];
+        for (var j = 0; j < sourceNames.length; j++) {{
+            newTracks.push({{name: sourceNames[j], artist: sourceArtists[j]}});
+        }}
+        
+        if ({js_dry_run}) {{
+            return JSON.stringify({{
+                status: "success",
+                dry_run: true,
+                before_count: destNames.length,
+                after_count: sourceNames.length,
+                before_tracks: beforeTracks,
+                after_tracks: newTracks
+            }});
+        }}
+        
+        // Delete all tracks in destination
+        var destTracks = destPlaylist.tracks();
+        for (var k = destTracks.length - 1; k >= 0; k--) {{
+            try {{
+                destTracks[k].delete();
+            }} catch (e) {{}}
+        }}
+        
+        // Duplicate tracks from source to destination
+        var sourceTracks = sourcePlaylist.tracks();
+        var addedCount = 0;
+        for (var k = 0; k < sourceTracks.length; k++) {{
+            try {{
+                sourceTracks[k].duplicate({{to: destPlaylist}});
+                addedCount++;
+            }} catch (e) {{}}
+        }}
+        
+        return JSON.stringify({{
+            status: "success",
+            dry_run: false,
+            before_count: destNames.length,
+            after_count: addedCount,
+            before_tracks: beforeTracks,
+            after_tracks: newTracks
+        }});
+        """
+        response_raw = self._run_jxa(jxa_script)
+        if not response_raw:
+            raise MusicAppException("Empty response while synchronizing playlists.")
+        try:
+            data = json.loads(response_raw)
+            if data.get("status") == "error":
+                raise MusicAppException(
+                    f"Failed to synchronize playlists: {data.get('message')}"
+                )
+            return data
+        except json.JSONDecodeError:
+            raise MusicAppException(
+                f"Invalid JSON returned from JXA sync: {response_raw}"
             )

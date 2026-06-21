@@ -605,3 +605,84 @@ def test_cli_prune_artist_tight_matching(mock_ipc_engine):
         assert result.exit_code == 0
         assert "No tracks by artist 'Pink' found" in result.stdout
         mock_ipc_engine.delete_tracks_by_id.assert_not_called()
+
+
+def test_cli_sync_success(mock_ipc_engine):
+    mock_ipc_engine.sync_from_playlist.return_value = {
+        "status": "success",
+        "dry_run": False,
+        "before_count": 5,
+        "after_count": 10,
+        "before_tracks": [],
+        "after_tracks": [],
+    }
+    with mock.patch("sys.platform", "darwin"):
+        result = runner.invoke(
+            app, ["sync", "-s", "Scratch Playlist", "-d", "Shared Playlist"]
+        )
+        assert result.exit_code == 0
+        assert "Sync completed successfully:" in result.stdout
+        assert "Removed 5 tracks from destination" in result.stdout
+        assert "Copied 10 tracks from source" in result.stdout
+        mock_ipc_engine.sync_from_playlist.assert_called_once_with(
+            "Scratch Playlist", dry_run=False
+        )
+
+
+def test_cli_sync_dry_run(mock_ipc_engine):
+    mock_ipc_engine.sync_from_playlist.return_value = {
+        "status": "success",
+        "dry_run": True,
+        "before_count": 5,
+        "after_count": 10,
+        "before_tracks": [],
+        "after_tracks": [],
+    }
+    with mock.patch("sys.platform", "darwin"):
+        result = runner.invoke(
+            app,
+            [
+                "sync",
+                "-s",
+                "Scratch Playlist",
+                "-d",
+                "Shared Playlist",
+                "--dry-run",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "[DRY-RUN] Sync simulation complete:" in result.stdout
+        assert "Will delete all 5 tracks" in result.stdout
+        assert "Will duplicate 10 tracks" in result.stdout
+        mock_ipc_engine.sync_from_playlist.assert_called_once_with(
+            "Scratch Playlist", dry_run=True
+        )
+
+
+def test_cli_sync_same_playlist(mock_ipc_engine):
+    with mock.patch("sys.platform", "darwin"):
+        result = runner.invoke(
+            app, ["sync", "-s", "Shared Playlist", "-d", "Shared Playlist"]
+        )
+        assert result.exit_code == 1
+        mock_ipc_engine.sync_from_playlist.assert_not_called()
+
+
+def test_cli_sync_error(mock_ipc_engine):
+    mock_ipc_engine.sync_from_playlist.side_effect = MusicAppException(
+        "Source playlist not found."
+    )
+    with mock.patch("sys.platform", "darwin"):
+        result = runner.invoke(
+            app, ["sync", "-s", "Missing Playlist", "-d", "Shared Playlist"]
+        )
+        assert result.exit_code == 1
+
+
+def test_format_duration():
+    from moshpit.cli import format_duration
+
+    assert format_duration(15.25) == "15.25 seconds"
+    assert format_duration(429.47) == "7 minutes and 9.47 seconds"
+    assert format_duration(3665.5) == "1 hour, 1 minute, and 5.50 seconds"
+    assert format_duration(7200.0) == "2 hours"

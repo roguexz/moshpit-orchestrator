@@ -26,6 +26,35 @@ def main():
     pass
 
 
+def format_duration(seconds: float) -> str:
+    """Formats a duration in seconds into a human-readable string."""
+    if seconds < 60:
+        return f"{seconds:.2f} seconds"
+
+    total_seconds = int(seconds)
+    fraction = seconds - total_seconds
+
+    minutes, secs = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+
+    parts = []
+    if hours > 0:
+        parts.append(f"{hours} hour{'s' if hours > 1 else ''}")
+    if minutes > 0:
+        parts.append(f"{minutes} minute{'s' if minutes > 1 else ''}")
+
+    secs_float = secs + fraction
+    if secs_float > 0 or not parts:
+        parts.append(f"{secs_float:.2f} seconds")
+
+    if len(parts) == 1:
+        return parts[0]
+    elif len(parts) == 2:
+        return f"{parts[0]} and {parts[1]}"
+    else:
+        return f"{', '.join(parts[:-1])}, and {parts[-1]}"
+
+
 def validate_platform():
     """Verifies that the script is running on macOS."""
     if sys.platform != "darwin":
@@ -143,6 +172,7 @@ def run(
     # 1. Initialize logging level
     log_level = "DEBUG" if verbose else "INFO"
     setup_logger(level=log_level)
+    start_time = time.time()
 
     logger.info("Initializing Moshpit Mauler runtime environment...")
 
@@ -402,6 +432,9 @@ def run(
     # Update playlist sync cache
     cache.update_playlist_sync(target_playlist)
 
+    duration = time.time() - start_time
+    logger.info(f"Command completed in {format_duration(duration)}.")
+
 
 @app.command("analyze")
 def analyze_playlist(
@@ -612,6 +645,96 @@ def prune_playlist(
     finally:
         if hasattr(engine, "close"):
             engine.close()
+
+
+@app.command("sync")
+def sync_playlists(
+    source: str = typer.Option(
+        ..., "--source", "-s", help="Name of the source playlist to sync from"
+    ),
+    destination: str = typer.Option(
+        ..., "--destination", "-d", help="Name of the destination playlist to sync to"
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Simulate the sync without modifying the destination playlist",
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Enable debug logging output"
+    ),
+):
+    """
+    Synchronize two Apple Music playlists (source to destination).
+    This mirrors the source playlist into the destination playlist, keeping the destination's ID and shared link.
+    """
+    log_level = "DEBUG" if verbose else "INFO"
+    setup_logger(level=log_level)
+    start_time = time.time()
+    try:
+        validate_platform()
+    except PlatformNotSupportedError as e:
+        logger.error(str(e))
+        raise typer.Exit(code=1)
+
+    if source == destination:
+        logger.error("Source and destination playlist names must be different.")
+        raise typer.Exit(code=1)
+
+    logger.info(f"Connecting to Apple Music to sync '{source}' to '{destination}'...")
+    try:
+        # Note: we initialize the engine with the destination playlist name.
+        # This will verify/create it as needed.
+        engine = AppleMusicIPCEngine(destination)
+    except Exception as e:
+        logger.error(f"Failed to initialize Apple Music connection: {e}")
+        raise typer.Exit(code=1)
+
+    try:
+        if dry_run:
+            logger.info(
+                f"[DRY-RUN] Simulating sync from '{source}' to '{destination}'..."
+            )
+        else:
+            logger.info(f"Syncing tracks from '{source}' to '{destination}'...")
+
+        result = engine.sync_from_playlist(source, dry_run=dry_run)
+
+        if result.get("status") == "success":
+            before_count = result.get("before_count", 0)
+            after_count = result.get("after_count", 0)
+
+            if dry_run:
+                typer.echo("[DRY-RUN] Sync simulation complete:")
+                typer.echo(
+                    f"  - Destination '{destination}' currently has {before_count} tracks."
+                )
+                typer.echo(
+                    f"  - Will delete all {before_count} tracks in '{destination}'."
+                )
+                typer.echo(
+                    f"  - Will duplicate {after_count} tracks from source '{source}' to '{destination}'."
+                )
+            else:
+                typer.echo("Sync completed successfully:")
+                typer.echo(
+                    f"  - Removed {before_count} tracks from destination '{destination}'."
+                )
+                typer.echo(
+                    f"  - Copied {after_count} tracks from source '{source}' to '{destination}'."
+                )
+        else:
+            logger.error(f"Failed to sync playlists: {result.get('message')}")
+            raise typer.Exit(code=1)
+
+    except Exception as e:
+        logger.error(f"Failed to sync playlists: {e}")
+        raise typer.Exit(code=1)
+    finally:
+        if hasattr(engine, "close"):
+            engine.close()
+        duration = time.time() - start_time
+        logger.info(f"Command completed in {format_duration(duration)}.")
 
 
 if __name__ == "__main__":

@@ -389,3 +389,59 @@ class TestResolveOrchestration:
                 with mock.patch.object(resolver, "_resolve_llm", return_value=[]):
                     tracks = resolver.resolve("Unknown", 3)
                     assert tracks == []
+
+    def test_resolve_deduplicates_versions(self, resolver):
+        """Verify that resolve() returns deduplicated versions of tracks."""
+        with mock.patch.object(
+            resolver,
+            "_resolve_itunes_search",
+            return_value=[
+                TrackSuggestion(title="Comfortably Numb (Live)", artist="Pink Floyd", source="itunes_api"),
+                TrackSuggestion(title="Comfortably Numb", artist="Pink Floyd", source="itunes_api"),
+                TrackSuggestion(title="Time", artist="Pink Floyd", source="itunes_api"),
+            ],
+        ):
+            with mock.patch.object(resolver, "_resolve_itunes_lookup", return_value=[]):
+                with mock.patch.object(resolver, "_resolve_llm", return_value=[]):
+                    tracks = resolver.resolve("Pink Floyd", 5)
+                    assert len(tracks) == 2
+                    assert [t.title for t in tracks] == ["Comfortably Numb", "Time"]
+
+
+
+class TestDeduplicateSuggestions:
+    def test_deduplicate_suggestions_picks_better_version(self, resolver):
+        tracks = [
+            TrackSuggestion(title="Comfortably Numb (Live)", artist="Pink Floyd", source="itunes_api"),
+            TrackSuggestion(title="Comfortably Numb", artist="Pink Floyd", source="itunes_api"),
+            TrackSuggestion(title="Time", artist="Pink Floyd", source="itunes_api"),
+            TrackSuggestion(title="Time (Live at Pompeii)", artist="Pink Floyd", source="itunes_api"),
+        ]
+        dedupped = resolver._deduplicate_suggestions(tracks)
+        # Should keep "Comfortably Numb" (index 1) and "Time" (index 2)
+        assert len(dedupped) == 2
+        titles = [t.title for t in dedupped]
+        assert titles == ["Comfortably Numb", "Time"]
+
+    def test_deduplicate_suggestions_preserves_order_on_ties(self, resolver):
+        tracks = [
+            TrackSuggestion(title="Track B", artist="Artist", source="itunes_api"),
+            TrackSuggestion(title="Track A", artist="Artist", source="itunes_api"),
+        ]
+        dedupped = resolver._deduplicate_suggestions(tracks)
+        assert [t.title for t in dedupped] == ["Track B", "Track A"]
+
+
+class TestMergeTracksDeduplication:
+    def test_merge_tracks_deduplicates_versions(self):
+        primary = [
+            TrackSuggestion(title="Comfortably Numb", artist="Pink Floyd", source="itunes_api"),
+        ]
+        secondary = [
+            TrackSuggestion(title="Comfortably Numb (Live)", artist="Pink Floyd", source="llm"),
+            TrackSuggestion(title="Time", artist="Pink Floyd", source="llm"),
+        ]
+        merged = TopTracksResolver._merge_tracks(primary, secondary, 10)
+        assert len(merged) == 2
+        assert [t.title for t in merged] == ["Comfortably Numb", "Time"]
+

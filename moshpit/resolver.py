@@ -7,7 +7,9 @@ import requests
 from loguru import logger
 
 from moshpit.config import settings
+from moshpit.dedup import normalize_track_title, get_track_preference_score
 from moshpit.ingest.normalizer import extract_json_block
+
 
 
 @dataclass
@@ -53,6 +55,7 @@ class TopTracksResolver:
         """
         # Tier 1: iTunes Search API — song search (fast, usually good results)
         tracks = self._resolve_itunes_search(artist, count)
+        tracks = self._deduplicate_suggestions(tracks)
         if len(tracks) >= count:
             return tracks[:count]
 
@@ -61,6 +64,7 @@ class TopTracksResolver:
         if len(tracks) < count:
             lookup_tracks = self._resolve_itunes_lookup(artist, count)
             if lookup_tracks:
+                lookup_tracks = self._deduplicate_suggestions(lookup_tracks)
                 tracks = self._merge_tracks(tracks, lookup_tracks, count)
                 if len(tracks) >= count:
                     return tracks[:count]
@@ -68,9 +72,12 @@ class TopTracksResolver:
         # Tier 3: LLM fallback — ask local LLM for well-known tracks
         if len(tracks) < count:
             llm_tracks = self._resolve_llm(artist, count - len(tracks))
-            tracks = self._merge_tracks(tracks, llm_tracks, count)
+            if llm_tracks:
+                llm_tracks = self._deduplicate_suggestions(llm_tracks)
+                tracks = self._merge_tracks(tracks, llm_tracks, count)
 
         return tracks[:count]
+
 
     def _resolve_itunes_search(self, artist: str, count: int) -> List[TrackSuggestion]:
         """Tier 1: Query the iTunes Search API for songs matching the artist name."""
@@ -78,7 +85,7 @@ class TopTracksResolver:
             params = {
                 "term": artist,
                 "entity": "song",
-                "limit": str(min(count * 2, 200)),  # overfetch to filter
+                "limit": str(min(max(count * 3, 50), 200)),  # overfetch to allow version deduplication
                 "country": self._storefront,
             }
             resp = requests.get(
@@ -148,7 +155,7 @@ class TopTracksResolver:
             params = {
                 "id": str(artist_id),
                 "entity": "song",
-                "limit": str(min(count * 2, 200)),
+                "limit": str(min(max(count * 3, 50), 200)),  # overfetch to allow version deduplication
                 "country": self._storefront,
             }
             resp = requests.get(
@@ -286,13 +293,46 @@ class TopTracksResolver:
         secondary: List[TrackSuggestion],
         limit: int,
     ) -> List[TrackSuggestion]:
-        """Merge two track lists, deduplicating by title (case-insensitive)."""
-        seen = {t.title.lower() for t in primary}
+        """Merge two track lists, deduplicating by normalized title."""
+        seen = {normalize_track_title(t.title) for t in primary}
         merged = list(primary)
         for track in secondary:
             if len(merged) >= limit:
                 break
-            if track.title.lower() not in seen:
-                seen.add(track.title.lower())
+            norm = normalize_track_title(track.title)
+            if norm not in seen:
+                seen.add(norm)
                 merged.append(track)
         return merged
+
+    def _deduplicate_suggestions(self, tracks: List[TrackSuggestion]) -> List[TrackSuggestion]:
+        """
+        Deduplicates track suggestions by normalized title, picking the version
+        with the highest preference score, and preserving original relative order.
+        """
+        groups = {}  # norm_title -> List[(index, track)]
+        for idx, track in enumerate(tracks):
+            norm_title = normalize_track_title(track.title)
+            if norm_title not in groups:
+                groups[norm_title] = []
+            groups[norm_title].append((idx, track))
+
+        unique_tracks = []
+        for norm_title, group in groups.items():
+            # Sort by preference score descending, then original index ascending (negated index for reverse)
+            sorted_group = sorted(
+                group,
+                key=lambda item: (
+                    get_track_preference_score(item[1].title),
+                    -item[0],
+                ),
+                reverse=True,
+            )
+            # Keep the best track (first one in the sorted group)
+            best_track_idx, best_track = sorted_group[0]
+            unique_tracks.append((best_track_idx, best_track))
+
+        # Sort selected tracks by their original index to preserve overall order
+        unique_tracks.sort(key=lambda item: item[0])
+        return [track for _, track in unique_tracks]
+

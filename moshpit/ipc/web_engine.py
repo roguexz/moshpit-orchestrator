@@ -498,16 +498,31 @@ class AppleMusicWebEngine:
             return JSON.stringify({{status: "error", message: "Playlist not found"}});
         }}
         var tracks = targetPlaylist.tracks();
+        var ids = [];
+        try {{
+            ids = targetPlaylist.tracks.id();
+        }} catch (e) {{}}
         var count = 0;
         var toDelete = {js_track_ids};
-        for (var j = tracks.length - 1; j >= 0; j--) {{
-            try {{
-                var trackId = tracks[j].id();
-                if (toDelete.indexOf(trackId) !== -1) {{
-                    tracks[j].delete();
-                    count++;
+        if (ids.length === 0 && tracks.length > 0) {{
+            for (var j = tracks.length - 1; j >= 0; j--) {{
+                try {{
+                    var trackId = tracks[j].id();
+                    if (toDelete.indexOf(trackId) !== -1) {{
+                        tracks[j].delete();
+                        count++;
+                    }}
+                }} catch (e) {{}}
+            }}
+        }} else {{
+            for (var j = ids.length - 1; j >= 0; j--) {{
+                if (toDelete.indexOf(ids[j]) !== -1) {{
+                    try {{
+                        tracks[j].delete();
+                        count++;
+                    }} catch (e) {{}}
                 }}
-            }} catch (e) {{}}
+            }}
         }}
         return JSON.stringify({{status: "success", count: count}});
         """

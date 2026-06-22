@@ -491,16 +491,31 @@ class AppleMusicIPCEngine:
             return JSON.stringify({{status: "error", message: "Playlist not found"}});
         }}
         var tracks = targetPlaylist.tracks();
+        var ids = [];
+        try {{
+            ids = targetPlaylist.tracks.id();
+        }} catch (e) {{}}
         var count = 0;
         var toDelete = {js_track_ids};
-        for (var j = tracks.length - 1; j >= 0; j--) {{
-            try {{
-                var trackId = tracks[j].id();
-                if (toDelete.indexOf(trackId) !== -1) {{
-                    tracks[j].delete();
-                    count++;
+        if (ids.length === 0 && tracks.length > 0) {{
+            for (var j = tracks.length - 1; j >= 0; j--) {{
+                try {{
+                    var trackId = tracks[j].id();
+                    if (toDelete.indexOf(trackId) !== -1) {{
+                        tracks[j].delete();
+                        count++;
+                    }}
+                }} catch (e) {{}}
+            }}
+        }} else {{
+            for (var j = ids.length - 1; j >= 0; j--) {{
+                if (toDelete.indexOf(ids[j]) !== -1) {{
+                    try {{
+                        tracks[j].delete();
+                        count++;
+                    }} catch (e) {{}}
                 }}
-            }} catch (e) {{}}
+            }}
         }}
         return JSON.stringify({{status: "success", count: count}});
         """
@@ -590,21 +605,30 @@ class AppleMusicIPCEngine:
         }}
         
         // Delete all tracks in destination
-        var destTracks = destPlaylist.tracks();
-        for (var k = destTracks.length - 1; k >= 0; k--) {{
-            try {{
-                destTracks[k].delete();
-            }} catch (e) {{}}
+        try {{
+            Music.delete(destPlaylist.tracks);
+        }} catch (e) {{
+            var destTracks = destPlaylist.tracks();
+            for (var k = destTracks.length - 1; k >= 0; k--) {{
+                try {{
+                    destTracks[k].delete();
+                }} catch (err) {{}}
+            }}
         }}
         
         // Duplicate tracks from source to destination
-        var sourceTracks = sourcePlaylist.tracks();
         var addedCount = 0;
-        for (var k = 0; k < sourceTracks.length; k++) {{
-            try {{
-                sourceTracks[k].duplicate({{to: destPlaylist}});
-                addedCount++;
-            }} catch (e) {{}}
+        try {{
+            Music.duplicate(sourcePlaylist.tracks, {{to: destPlaylist}});
+            addedCount = sourceNames.length;
+        }} catch (e) {{
+            var sourceTracks = sourcePlaylist.tracks();
+            for (var k = 0; k < sourceTracks.length; k++) {{
+                try {{
+                    sourceTracks[k].duplicate({{to: destPlaylist}});
+                    addedCount++;
+                }} catch (err) {{}}
+            }}
         }}
         
         return JSON.stringify({{
